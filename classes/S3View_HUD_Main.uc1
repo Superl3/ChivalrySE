@@ -1,0 +1,42 @@
+class S3View_HUD_Main extends AOCView_HUD_Main;
+
+function ShowHintCrosshair(bool bDisplay, EHintCrosshairImg Img, string Text)
+{
+	local ASColorTransform TempColorTransform;
+	local Rotator newRot;
+	local string TextureImg;
+	newRot.Yaw = 0;
+	newRot.Roll = 0;
+	newRot.Pitch = 0;
+	if (bDisplay)
+	{
+		// Set Image appropriately
+		switch(Img)
+		{
+		case EHX_VolCap:
+			TextureImg = "img://UI_HUD_SWF.icon_capture_png";
+			break;
+		case EHX_Team:
+			TextureImg = "img://UI_HUD_SWF.hud_xhair_scope";
+			TempColorTransform.multiply.R = 1;
+			TempColorTransform.multiply.G = 0;
+			TempColorTransform.multiply.B = 0;
+			newRot.Roll = 8192;
+			break;
+		case EHX_Use:
+		case EHX_VolPush:
+		default:
+			TextureImg = "img://UI_HUD_SWF.icon_use_png";
+			break;
+		}
+		HintIcon.SetColorTransform(TempColorTransform);
+		HintIcon.SetRotation(Rotator(newRot));
+		HintIcon.SetString("source", TextureImg);
+		HintText.SetText(Text);
+
+		if (!HintCrosshair.GetBool("_visible"))
+			HintProgress.SetVisible(false);
+	}
+
+	HintCrosshair.SetVisible(bDisplay);
+}

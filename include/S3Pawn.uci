@@ -1,0 +1,1165 @@
+var bool onSwitchingChk;
+simulated function AOCSetCharacterClassFromInfo(AOCFamilyInfo Info)
+{
+	//Keeps function from setting class and health if pawn has already spawned and died
+	if(self.IsInState('dying'))
+		return;
+
+	if (Info == none || Info == PawnFamily)
+		return;
+
+
+	PawnFamily = Info;
+	AOCPRI(PlayerReplicationInfo).MyFamilyInfo = Info;
+	AOCPRI(PlayerReplicationInfo).ClearNextTeam();
+
+	if(AOCFFAPRI(PlayerReplicationInfo) != none)
+	{
+		TeamCollisionID = 3;
+	}
+	else if(PawnFamily.FamilyFaction == EFAC_AGATHA)
+	{
+		TeamCollisionID = 1;
+	}
+	else if (PawnFamily.FamilyFaction == EFAC_MASON)
+	{
+		TeamCollisionID = 2;
+	}
+	else
+	{
+		TeamCollisionID = 0;
+	}
+
+		`{GAMEMODE}g(WorldInfo.Game).RCon.GameEvent_TeamChanged_New(PlayerReplicationInfo, PawnFamily.FamilyFaction);
+
+	//if(PawnCharacter == none)
+	//{
+	//	//we need _something_, so force it to the default one
+	//	SetCharacterAppearanceFromInfo(CustomizationClass.static.GetCharacterInfo(CustomizationClass.static.GetDefaultCharacterID(PawnFamily.FamilyFaction, PawnFamily.ClassReference)));
+	//}
+
+	fMaxComplexRelevancyDistanceSquared = PawnFamily.fMaxComplexRelevancyDistanceSquared;
+
+	// Set Health in PRI
+	if (Role == ROLE_Authority)
+	{
+		if (AOCPRI(PlayerReplicationInfo).CurrentHealth != Health) // if-check to avoid unnecessarily setting bNetDirty
+		{
+			AOCPRI(PlayerReplicationInfo).CurrentHealth = Health;
+			AOCPRI(PlayerReplicationInfo).bForceNetUpdate = true;
+		}
+	}
+	
+
+	if (!bIsBot || bIsBeingFPObserved)
+	{
+		AirControl = PawnFamily.AirControl;
+		GroundSpeed = PawnFamily.GroundSpeed;
+		BaseSpeed = GroundSpeed;
+		WaterSpeed = PawnFamily.WaterSpeed;
+		AirSpeed = PawnFamily.AirSpeed;
+		//Acceleration = PawnFamily.Acceleration;
+		AccelRate = PawnFamily.AccelRate;
+		BaseAccel = PawnFamily.AccelRate;
+		JumpZ = PawnFamily.JumpZ;
+		SprintAccel = PawnFamily.SprintAccelRate;
+		SprintModifier=PawnFamily.SprintModifier;
+		SprintTime=PawnFamily.SprintTime;
+		DodgeSpeed=PawnFamily.DodgeSpeed;
+		DodgeSpeedZ=PawnFamily.DodgeSpeedZ;
+		ParryComponent.SetScale3D(PawnFamily.ParryBoxScale);
+		ParryComponent.SetTranslation(PawnFamily.ParryBoxTranslation); 
+
+		if (IsLocallyControlled())
+		{
+			`{GAMEMODE}PlayerController(Controller).DefaultFOV = `{GAMEMODE}PlayerController(Controller).MyFOV;
+			`{GAMEMODE}PlayerController(Controller).DesiredFOV = `{GAMEMODE}PlayerController(Controller).MyFOV;
+			`{GAMEMODE}PlayerController(Controller).SetFOV(`{GAMEMODE}PlayerController(Controller).MyFOV);
+		}
+	}
+	else
+	{
+		AirControl = PawnFamily.AirControl;
+		GroundSpeed = PawnFamily.GroundSpeed;
+		BaseSpeed = GroundSpeed;
+		WaterSpeed = PawnFamily.WaterSpeed;
+		AirSpeed = PawnFamily.AirSpeed;
+		//Acceleration = PawnFamily.Acceleration;
+		AccelRate = PawnFamily.AccelRate;
+		BaseAccel = PawnFamily.AccelRate;
+		JumpZ = PawnFamily.JumpZ;
+		SprintAccel = PawnFamily.SprintAccelRate;
+		SprintModifier=PawnFamily.SprintModifier;
+		SprintTime=PawnFamily.SprintTime;
+		DodgeSpeed=PawnFamily.DodgeSpeed;
+		DodgeSpeedZ=PawnFamily.DodgeSpeedZ;
+	}
+
+	fLungeForwardSpeed = PawnFamily.LungeForward;
+	fLungeZSpeed = PawnFamily.LungeZ;
+
+	if (IsLocallyControlled() && `{GAMEMODE}PlayerController(Controller) != none)
+		`{GAMEMODE}PlayerController(Controller).MaxSprintTurnSpeed = PawnFamily.SprintTurnSpeed;
+
+	// set max health
+	if(Role == ROLE_Authority)
+	{
+		HealthMax = PawnFamily.Health;
+
+		if (PawnInfo.myForcedHealth <= 0 || PawnInfo.myForcedHealth == 255) //protection for mods or legacy code that are casting a -1 Int to a Byte
+			Health = PawnFamily.Health;
+		else
+			Health = PawnInfo.myForcedHealth;
+	}
+
+	if(Role == ROLE_Authority)
+	{
+		// set state variables as well
+		StateVariables.bIsActiveShielding = false;
+		StateVariables.bIsParrying = false;
+		StateVariables.bIsSprinting = false;
+		StateVariables.bShieldEquipped = false;
+		StateVariables.bCanCrouch = true;
+		StateVariables.bCanSprintAttack = true;
+	}
+
+	Mass = PawnFamily.fMass;
+
+	// Set some HUD Variables here
+	if(Role < ROLE_Authority || WorldInfo.NetMode == NM_STANDALONE || Worldinfo.NetMode == NM_ListenServer)
+	{
+		if (!bIsBot && IsLocallyControlled())
+		{ 
+			AOCBaseHUD(PlayerController(Controller).myHUD).SetStaminaValues(Stamina, MaxStamina);
+			AOCBaseHUD(PlayerController(Controller).myHUD).SetHealthValues(Health, HealthMax);
+		}
+		else if(bIsBeingFPObserved)
+		{
+			AOCBaseHUD(GetALocalPlayerController().myHUD).SetStaminaValues(Stamina, MaxStamina);
+			AOCBaseHUD(GetALocalPlayerController().myHUD).SetHealthValues(Health, HealthMax);
+		}
+	}
+
+	FORWARD_MODIFY = PawnFamily.FORWARD_MODIFY;
+	STRAFE_MODIFY = PawnFamily.STRAFE_MODIFY;
+	BACK_MODIFY = PawnFamily.BACK_MODIFY;
+	CROUCH_MODIFY = PawnFamily.CROUCH_MODIFY;
+
+	SetWeaponDefaults(PawnInfo.myPrimary, PawnInfo.myAlternatePrimary, PawnInfo.mySecondary, PawnInfo.myTertiary);
+
+	// Replicate inventory from the server
+	if (Role == ROLE_Authority)
+	{
+		AttachedItems[1] = PawnInfo.mySecondary.default.InventoryAttachmentClass;
+		AttachedItems[2] = PawnInfo.myTertiary.default.InventoryAttachmentClass;
+		AttachedItems[3] = PawnInfo.myPrimary.default.PermanentAttachmentClass[PawnInfo.myFamily.FamilyFaction];
+		AttachedItems[4] = PawnInfo.mySecondary.default.PermanentAttachmentClass[PawnInfo.myFamily.FamilyFaction];
+
+		if (Worldinfo.NetMode == NM_Standalone || bIsBot || Worldinfo.NetMode == NM_ListenServer)
+		{
+			SetTimer(0.1f, false, 'HandleReplicatedInventoryAttachment');
+		}
+	}
+
+	// Remember max/min spreads
+	MaxProjSpread = FMax( FMax( FMax(PawnFamily.fSprintingSpread, PawnFamily.fFallingSpread), PawnFamily.fCrouchingSpread),  PawnFamily.fWalkingSpread + PawnFamily.fStandingSpread);
+	MinProjSpread = Fmin( Fmin( Fmin(PawnFamily.fSprintingSpread, PawnFamily.fFallingSpread), PawnFamily.fCrouchingSpread),  PawnFamily.fWalkingSpread + PawnFamily.fStandingSpread);
+
+	if ( ( Role < ROLE_Authority || WorldInfo.NetMode == NM_Standalone || Worldinfo.NetMode == NM_ListenServer) && IsLocallyControlled() && !bIsBot)
+	{
+		AOCBaseHUD(`{GAMEMODE}PlayerController(Controller).myHUD).bIsLowAmmo = false;
+	}
+}
+function bool Died(Controller Killer, class<DamageType> DamageType, vector HitLocation)
+{
+	local AOCPRI PRI;
+	local int i;
+	local AOCAmmoDrop Drop;
+	local EAOCFaction KillerTeam, KilledTeam;
+	// 처치 표시
+	if(PawnFamily.FamilyFaction == AOCPawn(`{GAMEMODE}PlayerController(Killer).Pawn).PawnFamily.FamilyFaction) // FFA는 해당 X
+		`{GAMEMODE}PlayerController(Killer).Streak = 0;
+	else {
+		`{GAMEMODE}PlayerController(Killer).Streak += 1;
+		`{GAMEMODE}PlayerController(Killer).Notify_Kill(PlayerReplicationInfo.PlayerName);
+	}
+	`{GAMEMODE}PlayerController(Controller).Streak = 0;
+	
+	//AOCBaseHUD(`{GAMEMODE}PlayerController(Killer).myHUD).SetOverrideHintCrosshair(true, EHX_Default, "You Killed "$PlayerReplicationInfo.GetPlayerNameForMarkup());
+	if (`{GAMEMODE}PlayerController(Controller) != none  && `{GAMEMODE}PlayerController(Controller).bJustSuicided && LastPawnToHurtYou != none)
+	{
+		`{GAMEMODE}PlayerController(Controller).bJustSuicided = false;
+		Killer = LastPawnToHurtYou;
+	}
+	else if (`{GAMEMODE}PlayerController(Controller) != none  && `{GAMEMODE}PlayerController(Controller).bJustSuicided)
+	{
+		`{GAMEMODE}PlayerController(Controller).bJustSuicided = false;
+		Killer = none; // make sure noone gets points for dis.
+	}
+	else if (Killer == none && LastPawnToHurtYou != none)
+	{
+		Killer = LastPawnToHurtYou;
+	}
+
+	if (AOCTeamObjectivePC(Controller) != none)
+		AOCTeamObjectivePC(Controller).bCanChangeClass = true; // will only have 1 life as king.
+
+	if (`{GAMEMODE}PlayerController(Killer) != none)
+		KillerTeam = `{GAMEMODE}PlayerController(Killer).CurrentFamilyInfo.FamilyFaction;
+	else if (AOCAIController(Killer) != none)
+		KillerTeam = AOCAIController(Killer).myPawnClass.default.FamilyFaction;
+
+	if (`{GAMEMODE}PlayerController(Controller) != none)
+		KilledTeam = `{GAMEMODE}PlayerController(Controller).CurrentFamilyInfo.FamilyFaction;
+	else if (AOCAIController(Controller) != none)
+		KilledTeam = AOCAIController(Controller).myPawnClass.default.FamilyFaction;
+ 
+	// Distribute assists points as necessary
+	foreach ContributingDamagers(PRI)
+	{
+		if (PRI != AOCPRI(PlayerReplicationInfo) && PRI != AOCPRI(Killer.PlayerReplicationInfo))
+		{
+			// Make sure not on same team or the game is a FFA game
+			if (KilledTeam != KillerTeam && AOCFFA(WorldInfo.Game) == none )//`{GAMEMODE}g(WorldInfo.Game).CurrentGametypeNum != AOC_GAMETYPE_FFA)
+			{
+				PRI.NumAssists += 1;
+				PRI.ObjPoints += PawnFamily.AssistBonus;
+				PRI.Score += 5 + PawnFamily.AssistBonus;
+
+				if (PRI.OwnerController.StatWrapper != none)
+				{
+					PRI.OwnerController.StatWrapper.IncrementAssistStat();
+				}
+			}
+		}
+	}
+
+	// Spawn les ammos
+	for (i = 0; i < MAXIMUM_STORED_PROJECTILE_TYPES; i++)
+	{
+		//`log("Struck by projectile drop"@StruckByProjectiles[i].ProjectileOwner);
+		if (StruckByProjectiles[i].ProjectileOwner != none)
+		{
+			Drop = Spawn(class'AOCAmmoDrop', self,,Location, Rotation);
+			Drop.AmmoOwner = StruckByProjectiles[i].ProjectileOwner;
+			Drop.AmmoType = StruckByProjectiles[i].ProjectileType;
+			Drop.AmmoToGive = StruckByProjectiles[i].ProjectileCount;
+			Drop.bReady = true;
+
+			StruckByProjectiles[i].ProjectileOwner = none;
+		}
+	}
+
+	// Notify remote console
+	if (Killer == None || Killer.Pawn == Self)
+	{
+		`{GAMEMODE}g(WorldInfo.Game).RCon.GameEvent_Suicide(PlayerReplicationInfo);
+	}
+	else
+	{
+		`{GAMEMODE}g(WorldInfo.Game).RCon.GameEvent_Kill(Killer.PlayerReplicationInfo, PlayerReplicationInfo, AOCWeapon(Killer.Pawn.Weapon));
+	}
+
+	super(UTPawn).Died(Killer, DamageType, HitLocation);
+
+	return true;
+}
+
+
+reliable server function EquipShield(optional bool bCallWeapon = true, optional bool bToggleShield = false)
+{
+	if (!AOCWeapon(Weapon).bCanSwitchShield && StateVariables.bShieldEquipped)
+		return;
+
+	if (bToggleShield)
+	{
+		bWantsToEquipShield = !bWantsToEquipShield;
+	}
+	// first check if the currently equipped when can have a shield
+	if (AOCWeapon(Weapon).bHaveShield && AOCWeapon(Weapon).AllowedShieldClass != none)
+	{
+		// enable passive shielding just in case
+		StateVariables.bIsPassiveShielding = true;
+		// disable active shielding just in case
+		StateVariables.bIsActiveShielding = false;
+		// then check if we have a shield currently equipped or not
+		// de-equip shield
+		ShieldClass.bCallOnWeapon = bCallWeapon;
+		if (!bWantsToEquipShield && AOCWeapon(Weapon).bCanSwitchShield)
+		{
+			AttachShieldToBack(true);
+			StateVariables.bShieldEquipped = false;
+			ShieldClass.NewShield = none;
+			HandleShieldAttach();			
+		}
+		// equip shield
+		else
+		{
+			AttachShieldToBack(false);
+			StateVariables.bShieldEquipped = true;
+			ShieldClass.NewShield = AOCWeapon(Weapon).AllowedShieldClass;
+			HandleShieldAttach();
+			if (WorldInfo.NetMode != NM_STANDALONE && Worldinfo.NetMode != NM_ListenServer)
+			{
+				// Work around...shield seems not to be covering the face appropriately on the server
+				ShieldMesh.SetTranslation(Vect(0.0f, 0.0f, 6.0f));
+				ShieldMesh.SetScale(1.2f); 
+			}
+		}
+
+		HandleReplicatedInventoryAttachment();
+
+		// handle shield equip/unequip in the weapon class - server side
+		if (bCallWeapon)
+			AOCWeapon(Weapon).EquipShield(StateVariables.bShieldEquipped);
+	}
+	else
+	{
+		//Not allowed!
+		AttachShieldToBack(true);
+		StateVariables.bShieldEquipped = false;
+		ShieldClass.NewShield = none;
+		HandleShieldAttach();			
+		HandleReplicatedInventoryAttachment();
+	}
+}
+simulated function SwitchWeapon(byte NewGroup)
+{
+	local bool bTryToSwitchShield;
+	onSwitchingChk = true;
+	if (bSwitchingWeapons)
+		return;
+	`{GAMEMODE}PlayerController(Controller).ClientDisplayConsoleMessage("wpn change");
+	// Toggle shield with '3' or by pressing the current weapon again ('1' or '2')
+	bTryToSwitchShield = (NewGroup == 3 && class<AOCWeapon_Shield>(TertiaryWeapon) != none) ||
+						 (NewGroup == 2 && Weapon.Class == SecondaryWeapon) ||
+						 (NewGroup == 1 && Weapon.Class == PrimaryWeapon);
+
+	OnActionInitiated(EPlayerAction(EACT_WeaponChangedAny + int(NewGroup)));
+
+	//`log("SWITCH"@AOCInventoryManager(InvManager).bCanSwitchWeapons@AOCWeapon(Weapon).CanSwitch());
+	if (AOCInventoryManager(InvManager) != None && AOCInventoryManager(InvManager).bCanSwitchWeapons && (Weapon == none || AOCWeapon(Weapon).CanSwitch()) && !(NewGroup == 4 && AOCGRI(Worldinfo.GRI).bDisallowFists) && PawnState != ESTATE_SiegeWeapon && bSwitchingWeapons == false)
+	{
+	`{GAMEMODE}PlayerController(Controller).ClientDisplayConsoleMessage("wpn change if");
+		//`log("SWITCH WEAPON"@NewGroup@StateVariables.bIsAttacking);
+		if (NewGroup == 4)
+		{
+			// Fists!
+			if (StateVariables.bShieldEquipped)
+				EquipShield(false);
+			bSwitchingWeapons = true;
+			AOCInventoryManager(InvManager).SwitchWeapon(NewGroup);
+		}
+		else if (bTryToSwitchShield && class<AOCWeapon_Shield>(TertiaryWeapon) != none && AOCWeapon(Weapon).bHaveShield && !StateVariables.bIsAttacking
+			&& AOCWeapon(Weapon).bCanSwitchShield )
+		{
+			bSwitchingWeapons = true;
+			EquipShield(true, true);
+			OnActionSucceeded(EPlayerAction(EACT_WeaponChangedAny + int(NewGroup)));
+		}
+		else if ((NewGroup == 2 && Weapon.Class != SecondaryWeapon) || 
+				 (NewGroup == 3 && Weapon.Class != TertiaryWeapon && class<AOCWeapon_Shield>(TertiaryWeapon) == none 
+					&& (TertiaryWeapon != class'AOCWeapon_PaviseShield' || !bSpawnedPavise)))
+		{
+			if (StateVariables.bShieldEquipped)
+				EquipShield(false);
+			bSwitchingWeapons = true;
+			AOCInventoryManager(InvManager).SwitchWeapon(NewGroup);
+		}
+		else if (NewGroup == 1 && (Weapon.Class != PrimaryWeapon || (Weapon.Class != AlternatePrimaryWeapon && AlternatePrimaryWeapon != class'AOCWeapon_None')))
+		{
+			if ((Weapon.Class == PrimaryWeapon || Weapon.Class == AlternatePrimaryWeapon) && Weapon.GetStateName() != 'Active') // If we are swapping modes
+				return;
+
+			if (StateVariables.bShieldEquipped && class<AOCWeapon_JavelinThrow>(PrimaryWeapon) == none && class<AOCWeapon_JavelinMelee>(PrimaryWeapon) == none
+				&& class<AOCWeapon_JavelinThrow>(AlternatePrimaryWeapon) == none && class<AOCWeapon_JavelinMelee>(AlternatePrimaryWeapon) == none)
+			{
+				EquipShield(false);
+			}	
+			bSwitchingWeapons = true;
+			AOCInventoryManager(InvManager).SwitchWeapon(NewGroup);
+		}
+		else if (NewGroup == 1 && AlternatePrimaryWeapon == class'AOCWeapon_None' && class<AOCWeapon_Shield>(TertiaryWeapon) != none && AOCWeapon(Weapon).bHaveShield && !StateVariables.bIsAttacking
+			&& AOCWeapon(Weapon).bCanSwitchShield)
+		{
+			bSwitchingWeapons = true;
+			EquipShield(true, true);
+			OnActionSucceeded(EPlayerAction(EACT_WeaponChangedAny + int(NewGroup)));
+		}
+	}
+	else 
+	{
+		OnActionFailed(EPlayerAction(EACT_WeaponChangedAny + int(NewGroup)));
+		if (!bIsBot)
+		{
+			PlaySound(GenericCantDoSound, true);
+		}
+	}
+	onSwitchingChk = false;
+}
+
+event TakeDamage(int Damage, Controller InstigatedBy, vector HitLocation, vector Momentum, class<DamageType> DamageType, optional TraceHitInfo myHitInfo, optional Actor DamageCauser)
+{
+	//`log("CALLING TAKE DAMAGE"@InstigatedBy);
+	local Actor Attacker;
+	
+	if ((PawnState == ESTATE_PUSH) && AOCPlayerController(InstigatedBy) == none)
+		return;
+	
+	if(bNoDieMode && Health - Damage <= 0)
+	{
+		AOCPRI(PlayerReplicationInfo).CurrentHealth += -1 * (Health - Damage) + 1;
+		Health += -1 * (Health - Damage) + 1;
+	}
+
+	PauseHealthRegeneration(); // pause health regen here too.
+
+	// Let PRI Know
+	AOCPRI(PlayerReplicationInfo).CurrentHealth -= Damage;
+	AOCPRI(PlayerReplicationInfo).bForceNetUpdate = true;
+
+	// Notify Controller
+	if(AOCPlayerController(Controller) != none)
+	{
+		//try to find the PRI first; if we fail, use the attacking actor
+
+		if(InstigatedBy != none)
+		{
+			Attacker = InstigatedBy.PlayerReplicationInfo;
+		}
+		else if(Pawn(DamageCauser) != none)
+		{
+			Attacker = Pawn(DamageCauser).PlayerReplicationInfo;
+		}
+		else
+		{
+			Attacker = DamageCauser == none?InstigatedBy.Pawn:DamageCauser;
+		}
+
+		AOCPlayerController(Controller).NotifyPawnTookHit(Attacker, Damage, DamageType, myHitInfo.BoneName);
+	}
+	if(AOCPlayerController(InstigatedBy) != none)
+	{
+		AOCPlayerController(InstigatedBy).NotifyDealtDamage(self.PlayerReplicationInfo, Damage, DamageType, myHitInfo.BoneName);
+	}
+	else if(AOCPlayerController(Pawn(DamageCauser).Controller) != none)
+	{
+		AOCPlayerController(Pawn(DamageCauser).Controller).NotifyDealtDamage(self.PlayerReplicationInfo, Damage, DamageType, myHitInfo.BoneName);
+	}
+
+	// Sometimes TakeDamage is called and is not routed through AttackOtherPawn. Oh well. Watchoo gonna do.
+	ReplicatedHitInfo.DamageType = class<AOCDamageType>(DamageType);
+
+	AOCGame(WorldInfo.Game).DisplayDebugDamage(self, DamageCauser == none?InstigatedBy.Pawn:DamageCauser, EDAM_Health, Damage);
+
+	//PlayHealthChangedEffects();
+
+	//Take away the actual damage before going on (allows mutator damage adjustment)
+	super(UTPawn).TakeDamage(Damage, InstigatedBy, HitLocation, Momentum, DamageType, myHitInfo, DamageCauser);
+}
+
+reliable server function AttackOtherPawn(HitInfo Info, string DamageString, optional bool bCheckParryOnly = false, optional bool bBoxParrySuccess, optional bool bHitShield = false, optional SwingTypeImpactSound LastHit = ESWINGSOUND_Slash, optional bool bQuickKick = false)
+{
+	local bool bParry;
+	local float ActualDamage;
+	local bool bSameTeam;
+	local bool bFlinch;
+	local IAOCAIListener AIList;
+	local int i;
+	local float Resistance;
+	local float GenericDamage;
+	local float HitForceMag;
+	local PlayerReplicationInfo PRI;
+	local bool bOnFire;
+	local bool bPassiveBlock;
+	local AOCWeaponAttachment HitActorWeaponAttachment;
+	local class<AOCWeapon> UsedWeapon;
+	local TraceHitInfo THI;
+	local bool bEnemyWasBot;
+	local bool bWasKilled;
+	local float x;
+	local bool bFoundParryVolume;
+	local Vector TraceFromLocation;
+	local Vector HitLocation, HitNormal;
+
+	if (Info.DamageType.default.bIsProjectile && ( AOCWeapon(Info.Instigator.Weapon).WeaponName == "Shortbow" || AOCWeapon(Info.Instigator.Weapon).WeaponName == "Sling" || AOCWeapon(Info.Instigator.Weapon).WeaponName == "Light Crossbow" || AOCWeapon(Info.Instigator.Weapon).WeaponName == "Longbow" || AOCWeapon(Info.Instigator.Weapon).WeaponName == "Crossbow"))
+	{
+		TraceFromLocation = Info.HitLocation + 300.f*Info.HitNormal;
+				
+			// ( class<actor> BaseClass, out actor Actor, out vector HitLoc, out vector HitNorm, vector End, optional vector Start
+		bFoundParryVolume = TraceComponent(HitLocation, HitNormal, Info.HitActor.ParryComponent, Info.HitLocation, TraceFromLocation);
+	}
+	
+	bBoxParrySuccess = bBoxParrySuccess || bFoundParryVolume;
+	
+	if (PlayerReplicationInfo == none)
+		PRI = Info.PRI;
+	else
+		PRI = PlayerReplicationInfo;
+
+	Info.PRI = PRI;
+
+	if (!PerformAttackSSSC(Info) && WorldInfo.NetMode != NM_Standalone)
+	{
+		return;
+	}
+
+	if (Info.UsedWeapon == 0)
+	{
+		UsedWeapon = PrimaryWeapon;
+	}
+	else if (Info.UsedWeapon == 1)
+	{
+		UsedWeapon = SecondaryWeapon;
+	}
+	else
+	{
+		UsedWeapon = TertiaryWeapon;
+	}
+
+	HitActorWeaponAttachment = AOCWeaponAttachment(Info.HitActor.CurrentWeaponAttachment);
+
+	bSameTeam = IsOnSameTeam(self, Info.HitActor);
+
+	bParry = false;
+	bFlinch = false;
+// 방패를 착용시에도 페리로 인정 변경점
+		bParry = (bBoxParrySuccess && (Info.HitActor.StateVariables.bIsParrying || Info.HitActor.StateVariables.bIsActiveShielding) ||
+		((Info.BoneName == 'b_shield_root' || Info.BoneName == 'b_shield_1' || Info.BoneName == 'b_handle') && Info.HitActor.StateVariables.bShieldEquipped && (!Info.HitActor.Weapon.IsInState('Release') && !Info.HitActor.Weapon.IsInState('Flinch')))
+		&& class<AOCDmgType_Generic>(Info.DamageType) == none && Info.DamageType != class'AOCDmgType_SiegeWeapon');
+
+		// Check if fists...fists can only blocks fists
+		if (AOCWeapon_Fists(Info.HitActor.Weapon) != none && class<AOCDmgType_Fists>(Info.DamageType) == none)
+			bParry = false;
+
+		if(bParry)
+		{
+			DetectSuccessfulParry(Info, i, bCheckParryOnly, 0);
+		}
+		/*
+		if ((Info.HitActor.StateVariables.bIsParrying || Info.HitActor.StateVariables.bShieldEquipped) && class<AOCDmgType_Generic>(Info.DamageType) == none 
+			&& Info.DamageType != class'AOCDmgType_SiegeWeapon')
+		{
+			bParry = ParryDetectionBonusAngles(Info, bCheckParryOnly);
+		}
+		*/
+
+	if (Info.DamageType.default.bIsProjectile)
+		AOCPRI(PlayerReplicationInfo).NumHits += 1;
+	
+	bPassiveBlock = false;
+	if ( bHitShield && Info.DamageType.default.bIsProjectile)
+	{
+		// Check for passive shield block
+		bParry = true;
+		Info.HitDamage = 0.0f;
+		bPassiveBlock = !Info.HitActor.StateVariables.bIsActiveShielding;
+	}
+
+	if (bCheckParryOnly)
+		return;
+	//`log("SUCCESSFUL ATTACK OTHER PAWN HERE ("@self@Role@")->"@Info.HitActor);
+	// Play hit sound
+	AOCWeaponAttachment(CurrentWeaponAttachment).LastSwingType = LastHit;
+	if(!bParry)
+	{
+		Info.HitActor.OnActionFailed(EACT_Block);
+		Info.HitSound = AOCWeaponAttachment(CurrentWeaponAttachment).PlayHitPawnSound(Info.HitActor);
+	}
+	else        
+		Info.HitSound = AOCWeaponAttachment(CurrentWeaponAttachment).PlayHitPawnSound(Info.HitActor, true);
+	
+	if (AOCMeleeWeapon(Info.Instigator.Weapon) != none)
+	{
+		AOCMeleeWeapon(Info.Instigator.Weapon).bHitPawn = true;
+	}
+
+	// Less damage for quick kick
+	if (bQuickKick)
+	{
+		Info.HitDamage = 3;
+	}
+	
+	ActualDamage = Info.HitDamage;
+	GenericDamage = Info.HitDamage * Info.DamageType.default.DamageType[EDMG_Generic];
+	ActualDamage -= GenericDamage; //Generic damage is unaffected by resistances etc.
+
+	//Backstab damage for melee damage
+	if (!CheckOtherPawnFacingMe(Info.HitActor) && !Info.DamageType.default.bIsProjectile)
+		ActualDamage *= PawnFamily.fBackstabModifier;
+
+	// Vanguard Aggression
+	//ActualDamage *= PawnFamily.fComboAggressionBonus ** Info.HitCombo;
+	
+	// make the other pawn take damage, the push back should be handled here too
+	//Damage = HitDamage * LocationModifier * Resistances
+	if (Info.UsedWeapon == 0 && AOCWeapon_Crossbow(Weapon) != none && Info.DamageType.default.bIsProjectile)
+	{
+		ActualDamage *= Info.HitActor.PawnFamily.CrossbowLocationModifiers[GetBoneLocation(Info.BoneName)];
+	}
+	else
+	{
+		ActualDamage *= (Info.DamageType.default.bIsProjectile ? Info.HitActor.PawnFamily.ProjectileLocationModifiers[GetBoneLocation(Info.BoneName)] : 
+			Info.HitActor.PawnFamily.LocationModifiers[GetBoneLocation(Info.BoneName)]);
+	}
+		                                                           
+	Resistance = 0;
+	
+	for( i = 0; i < ArrayCount(Info.DamageType.default.DamageType); i++)
+	{
+		Resistance += Info.DamageType.default.DamageType[i] * Info.HitActor.PawnFamily.DamageResistances[i];
+	}
+	
+	ActualDamage *= Resistance;
+
+	if (PawnFamily.FamilyFaction == Info.HitActor.PawnFamily.FamilyFaction)
+		ActualDamage *= `{GAMEMODE}g(WorldInfo.Game).fTeamDamagePercent;
+		
+	ActualDamage += GenericDamage;
+		
+	//Damage calculations should be done now; round it to nearest whole number
+	ActualDamage = float(Round(ActualDamage));
+
+	//`log("ATTACK OTHER PAWN"@ActualDamage);
+	// Successful parry but stamina got too low!
+	
+	// 플린치 : 스태거링 시키기 
+	if (bParry && !bPassiveBlock && Info.HitActor.Stamina <= 0)
+	{
+		bFlinch = true;
+		AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), true, true, AOCWeapon(Weapon).bTwoHander); 
+	}
+	//Info.HitActor 맞는 사람
+	// if the other pawn is currently attacking, we just conducted a counter-attack 방패 킥 넉백
+	if (Info.AttackType == Attack_Shove && !bParry && !Info.HitActor.StateVariables.bIsSprintAttack)
+	{
+		// kick should activate flinch and take away 10 stamina 킥 관련 내용 방패 그냥 들고만 있어도 넉백
+		if (!bSameTeam)
+		{
+			bFlinch = true;
+			AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location),true, Info.HitActor.StateVariables.bIsActiveShielding && !bQuickKick, false);
+		}
+		Info.HitActor.ConsumeStamina(10);
+		if (Info.HitActor.StateVariables.bIsActiveShielding && Info.HitActor.Stamina <= 0)
+		{
+			Info.HitActor.ConsumeStamina(-30.f);
+		}
+	}
+	else if (Info.AttackType == Attack_Sprint && !bSameTeam)
+	{
+		bFlinch = true;
+		AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), true, false, AOCWeapon(Weapon).bTwoHander); // sprint attack should daze
+	}
+	else if ((Info.HitActor.StateVariables.bIsParrying) && !bSameTeam && !bParry)
+	{
+		bFlinch = true;
+		AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), class<AOCDmgType_Generic>(Info.DamageType) != none
+			, class<AOCDmgType_Generic>(Info.DamageType) != none, AOCWeapon(Weapon).bTwoHander);
+	}
+	else if(Info.HitActor.StateVariables.bIsActiveShielding && !bSameTeam && !bParry)
+	{
+	`{GAMEMODE}PlayerController(Info.HitActor.Controller).ClientDisplayConsoleMessage("shield carry");
+	`{GAMEMODE}PlayerController(Info.Instigator.Controller).ClientDisplayConsoleMessage("shield carry");
+		bFlinch = true;
+		AOCWeapon(Info.Instigator.Weapon).ActivateFlinch(true, Info.Instigator.GetHitDirection(Location*-1), class<AOCDmgType_Generic>(Info.DamageType) != none
+				, class<AOCDmgType_Generic>(Info.DamageType) != none, AOCWeapon(Weapon).bTwoHander);
+	}
+	else if(Info.HitActor.StateVariables.bShieldEquipped && !bSameTeam && !bParry)
+	{
+		`{GAMEMODE}PlayerController(Info.HitActor.Controller).ClientDisplayConsoleMessage("shield equip");
+		`{GAMEMODE}PlayerController(Info.Instigator.Controller).ClientDisplayConsoleMessage("shield equip");
+		bFlinch = true;
+		AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), class<AOCDmgType_Generic>(Info.DamageType) != none
+			, class<AOCDmgType_Generic>(Info.DamageType) != none, AOCWeapon(Weapon).bTwoHander);
+	}
+	else if (ShouldActivateFlinch(Info, UsedWeapon) && !bParry && !bSameTeam)
+	{
+		AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), false, false, AOCWeapon(Weapon).bTwoHander);
+	}
+	else if (!bParry && !bSameTeam) // cause the other pawn to play the hit animation
+	{
+		AOCWeapon(Info.HitActor.Weapon).ActivateHitAnim(Info.HitActor.GetHitDirection(Location, false, true), bSameTeam);
+	}
+
+	// GOD MODE - TODO: REMOVE
+	if (Info.HitActor.bInfiniteHealth)
+		ActualDamage = 0.0f;
+
+	if (ActualDamage > 0.0f)
+	{
+		Info.HitActor.SetHitDebuff();
+		LastAttackedBy = Info.Instigator;
+		PauseHealthRegeneration();
+		Info.HitActor.PauseHealthRegeneration();
+		Info.HitActor.DisableSprint(true);	
+		Info.HitActor.StartSprintRecovery();
+
+		// play a PING sound if we hit a player when shooting
+		if (Info.DamageType.default.bIsProjectile)
+			PlayRangedHitSound();
+		else
+		{
+			if(!bSameTeam)
+				PlayMeleeHit();
+		}
+
+		// Play sounds for everyone
+		if (Info.HitActor.Health - ActualDamage > 0.0f)
+			Info.HitActor.PlayHitSounds(ActualDamage, bFlinch);
+		
+		//PlayPitcherHitSound(ActualDamage, Info.HitActor.Location);
+		if (`{GAMEMODE}PlayerController(Controller) != none)
+			`{GAMEMODE}PlayerController(Controller).PC_SuccessfulHit();
+
+		// Add to assist list if not in it already
+		if (Info.HitActor.ContributingDamagers.Find(AOCPRI(PlayerReplicationInfo)) == INDEX_NONE && !bSameTeam)
+			Info.HitActor.ContributingDamagers.AddItem(AOCPRI(PlayerReplicationInfo));
+
+		Info.HitActor.LastPawnToHurtYou = Controller;
+
+		//do not set the timer to clear the last pawn to attack value on a duel map...we want players to receive the kill even if the other player
+		//  commits suicide by receiving falling damage or trap damage
+		if( AOCDuel(WorldInfo.Game) == none || CDWDuel(WorldInfo.Game) == none )
+			Info.HitActor.SetTimer(10.f, false, 'ClearLastPawnToAttack');
+
+		if (Info.DamageType.default.bIsProjectile)
+		{
+			Info.HitActor.StruckByProjectile(self, UsedWeapon);
+		}
+	}
+
+	
+	// Notify Pawn that we hit
+	if (AOCMeleeWeapon(Weapon) != none && Info.HitActor.Health - ActualDamage > 0.0f && Info.AttackType != Attack_Shove && Info.AttackType != Attack_Sprint && !bParry)
+		AOCMeleeWeapon(Weapon).NotifyHitPawn();
+
+	// pass attack info to be replicated to the clients
+	Info.bParry = bParry;
+	Info.DamageString = DamageString;
+	if (Info.BoneName == 'b_Neck' || Info.BoneName == 'b_Head') {
+			//AOCBaseHUD(`{GAMEMODE}PlayerController(Info.Instigator.Controller).myHUD).SetOverrideHintCrosshair(true, EHX_Default, "HEADSHOT!");
+	}
+	if (Info.BoneName == 'b_Neck' && !Info.DamageType.default.bIsProjectile && Info.DamageType.default.bCanDecap && Info.AttackType != Attack_Stab)
+		Info.DamageString $= "3";
+	else if ((Info.BoneName == 'b_Neck' || Info.BoneName == 'b_Head') && Info.DamageType.default.bIsProjectile)
+	{
+		Info.DamageString $= "4";
+
+		if ( `{GAMEMODE}PlayerController(Controller) != none)
+			`{GAMEMODE}PlayerController(Controller).NotifyAchievementHeadshot();
+	}
+	else if ((Info.BoneName == 'b_spine_A' || Info.BoneName == 'b_spine_B' || Info.BoneName == 'b_spine_C' || Info.BoneName == 'b_spine_D') && Info.DamageType.default.bIsProjectile)
+	{
+		if ( `{GAMEMODE}PlayerController(Controller) != none)
+			`{GAMEMODE}PlayerController(Controller).NotifyCupidProgress();
+	}
+	Info.HitActor.ReplicatedHitInfo = Info;
+	// 플린치 시에 가속도 0 넉백 계산 //////////////////////
+	Info.HitForce *= int(PawnState != ESTATE_PUSH && PawnState != ESTATE_BATTERING);
+	Info.HitForce *= int(!bFlinch);
+	if(Info.HitActor.StateVariables.bShieldEquipped)
+		Info.HitForce *= 0.625;
+	HitForceMag = VSize( Info.HitForce );
+	Info.HitForce.Z = 0.f;
+	Info.HitForce = Normal(Info.HitForce) * HitForceMag;
+	
+	Info.HitDamage = ActualDamage;
+
+	// Stat Tracking For Damage
+	// TODO: Also sort by weapon
+	if (PRI != none)
+	{
+		if (!bSameTeam)
+		{
+			AOCPRI(PRI).EnemyDamageDealt += ActualDamage;
+		}
+		else
+		{
+			if (Info.HitActor.PawnInfo.myFamily.ClassReference != ECLASS_Peasant
+				&& Info.HitActor.PlayerReplicationInfo != PRI)
+			{
+				AOCPRI(PRI).TeamDamageDealt += ActualDamage;
+				`{GAMEMODE}PlayerController(Controller).TeamDamageDealt += ActualDamage;
+			}
+		}
+		
+		AOCPRI(PRI).bForceNetUpdate = TRUE;
+	}
+
+	if (Info.HitActor.PlayerReplicationInfo != none)
+	{
+		AOCPRI(Info.HitActor.PlayerReplicationInfo).DamageTaken += ActualDamage;
+		AOCPRI(Info.HitActor.PlayerReplicationInfo).bForceNetUpdate = TRUE;
+	}
+
+	//`log("ATTACK OTHER PAWN ("@self@Role@")->"@Info.HitActor@Controller@CurrentSiegeWeapon.Controller);
+	bOnFire = Info.HitActor.bIsBurning;
+
+	THI = MakeTraceHitInfoFromHitInfo(Info);
+	
+	bEnemyWasBot = Info.HitActor.bIsBot || Info.HitActor.PlayerReplicationInfo.bBot || AOCPRI(Info.HitActor.PlayerReplicationInfo).bIsBot || AOCAIController(Info.HitActor.Controller) != none;
+
+	// 데미지를 실제로 주는 순간 백어택 / 드래깅 메소드
+	if(IsTimerActive('OnAttackAnimEnd'))
+	{
+		if(!Info.DamageType.default.bIsProjectile) {
+			x = GetTimerCount('OnAttackAnimEnd') / GetTimerRate('OnAttackAnimEnd') * 1.75 - 0.875;	
+			ActualDamage *= x*x*x*x*x*x*-1 + 1;
+		}
+	}
+	Info.HitActor.TakeDamage(ActualDamage, Controller != none ? Controller : CurrentSiegeWeapon.Controller, Info.HitLocation, Info.HitForce, Info.DamageType, THI);
+
+	bWasKilled = (Info.HitActor == none || Info.HitActor.Health <= 0);
+	Info.HitActor.ReplicatedHitInfo.bWasKilled = bWasKilled;
+
+	if (bWasKilled && WorldInfo.NetMode == NM_DedicatedServer)
+	{
+		// Make sure this wasn't a team kill
+		if (`{GAMEMODE}PlayerController(Controller).StatWrapper != none
+			&& !bSameTeam
+			&& Info.UsedWeapon < 2
+			&& !bEnemyWasBot)
+		{
+			`{GAMEMODE}PlayerController(Controller).StatWrapper.IncrementKillStats(
+				Info.UsedWeapon == 0 ? PrimaryWeapon : SecondaryWeapon, 
+				PawnFamily,
+				Info.HitActor.PawnFamily,
+				class<AOCWeapon>(HitActorWeaponAttachment.WeaponClass)
+			);
+		}
+		// Do another check for a headshot here
+		if (Info.BoneName == 'b_Neck' && !Info.DamageType.default.bIsProjectile && Info.DamageType.default.bCanDecap && Info.AttackType != Attack_Stab)
+		{
+			// Award rotiserie chef achievement on client
+			if (`{GAMEMODE}PlayerController(Controller) != none && bOnFire)
+			{
+				`{GAMEMODE}PlayerController(Controller).UnlockRotisserieChef();
+			}
+
+			// Notify decap
+			`{GAMEMODE}PlayerController(Controller).NotifyAchievementDecap();
+		}
+
+		// Check if fists
+		if (class<AOCDmgType_Fists>(Info.DamageType) != none)
+		{
+			if (`{GAMEMODE}PlayerController(Controller) != none)
+			{
+				`{GAMEMODE}PlayerController(Controller).NotifyFistofFuryProgress();
+			}
+		}
+	}
+
+	foreach AICombatInterests(AIList)
+	{
+		AIList.NotifyPawnPerformSuccessfulAttack(self);
+	}
+	
+	foreach Info.HitActor.AICombatInterests(AIList)
+	{
+		if (!bParry)
+			AIList.NotifyPawnReceiveHit(Info.HitActor,self);
+		else
+			AIList.NotifyPawnSuccessBlock(Info.HitActor, self);
+	}
+
+	// manually do the replication if we're on the standalone
+	if (WorldInfo.NetMode == NM_Standalone || Worldinfo.NetMode == NM_ListenServer)
+	{
+		Info.HitActor.HandlePawnGetHit();
+	}
+}
+
+/** Overridden to allow parrying of projectiles. */
+simulated function bool DetectSuccessfulParry(out HitInfo Info, out int bParry, bool bCheckParryOnly, int ParryLR)
+{
+	local int StaminaDamage;
+	local bool bOutOfStamina;
+	local string wpnName;
+	bOutOfStamina = false;
+	bParry = 1;
+	StaminaDamage = 0;
+	
+	// make the weapon [and thus the pawn] go into a deflect state
+	if ( !Info.DamageType.default.bIsProjectile )
+	{
+		AOCWeapon(Weapon).ActivateDeflect(Info.HitActor.StateVariables.bIsParrying);
+		AOCWeaponAttachment( CurrentWeaponAttachment ).PlayParriedSound();
+		
+		DisableSprint(true);
+		StartSprintRecovery();
+	}	
+	
+	// opponent has a successful parry
+	AOCWeapon(Info.HitActor.Weapon).NotifySuccessfulParry(Info.AttackType, ParryLR);
+	// 도끼류, 마울류일경우 막았어도 데미지 주기
+	wpnName = AOCWeapon(Info.Instigator.Weapon).WeaponName;
+	// 쉴드 변경
+	if(Info.HitActor.StateVariables.bIsActiveShielding)
+	{
+		AOCWeaponAttachment( Info.HitActor.CurrentWeaponAttachment ).PlayParrySound(true);
+		
+		// do a stamina loss only if it's a melee attack
+		if (!Info.DamageType.default.bIsProjectile)
+		{
+			StaminaDamage = Info.HitActor.ShieldClass.NewShield.static.CalculateParryDamage(Info.HitDamage);
+		
+			if (!Info.HitActor.HasEnoughStamina(StaminaDamage))
+			{
+				StaminaDamage = Info.HitActor.Stamina; 
+				Info.HitActor.ConsumeStamina(StaminaDamage);
+				// Regain 30 stamina
+				Info.HitActor.ConsumeStamina(-30.f);
+				AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), true, true, AOCWeapon(Weapon).bTwoHander);
+				Info.HitDamage = 0.0f;
+				bOutOfStamina = true;
+			}
+			
+			`{GAMEMODE}g(WorldInfo.Game).DisplayDebugDamage(Info.HitActor, self, EDAM_Stamina, StaminaDamage);
+			if(`{GAMEMODE}PlayerController(Controller) != none)
+			{
+				`{GAMEMODE}PlayerController(Controller).NotifyPawnWasParried(Info.HitActor, StaminaDamage, Info.BoneName, class<AOCWeapon>(Info.HitActor.Weapon.class), class<AOCWeapon>(Weapon.class));
+			}
+			if(`{GAMEMODE}PlayerController(Info.HitActor.Controller) != none)
+			{
+				`{GAMEMODE}PlayerController(Info.HitActor.Controller).NotifyPawnPerformedParry(PlayerReplicationInfo, StaminaDamage, Info.BoneName, class<AOCWeapon>(Weapon.class), class<AOCWeapon>(Info.HitActor.Weapon.class));
+			}
+
+			if(bOutOfStamina)
+			{
+				return true;
+			}
+
+			Info.HitActor.ConsumeStamina(StaminaDamage);
+		}
+		
+		//Parry means health damage is completely negated
+		Info.HitDamage = 0.0f;
+		
+		`{GAMEMODE}g(WorldInfo.Game).DisplayDebugDamage(Info.HitActor, self, EDAM_Stamina, StaminaDamage);
+		
+		// flinch if it's a kick
+		if (Info.AttackType == Attack_Shove)
+			AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), true, true, false);
+			
+		if(wpnName == "Double Axe" || wpnName == "Poleaxe" || wpnName == "Bearded Axe" || wpnName == "Maul" || wpnName == "Grand Mace")
+			Info.HitDamage = StaminaDamage*1.5;
+	}
+	else if((Info.BoneName == 'b_shield_root' || Info.BoneName == 'b_shield_1' || Info.BoneName == 'b_handle') && Info.HitActor.StateVariables.bShieldEquipped) {
+		AOCWeaponAttachment( Info.HitActor.CurrentWeaponAttachment ).PlayParrySound(true);
+		StaminaDamage = Info.HitActor.ShieldClass.NewShield.static.CalculateParryDamage(Info.HitDamage);
+		if (!Info.DamageType.default.bIsProjectile)
+		{
+			if (!Info.HitActor.HasEnoughStamina(StaminaDamage))
+			{
+				StaminaDamage = Info.HitActor.Stamina; 
+				Info.HitActor.ConsumeStamina(StaminaDamage);
+				// Regain 30 stamina
+				Info.HitActor.ConsumeStamina(-30.f);
+				AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), true, true, AOCWeapon(Weapon).bTwoHander);
+				Info.HitDamage = 0.0f;
+				bOutOfStamina = true;
+			}
+			
+			if(`{GAMEMODE}PlayerController(Controller) != none)
+			{
+				`{GAMEMODE}PlayerController(Controller).NotifyPawnWasParried(Info.HitActor, StaminaDamage, Info.BoneName, class<AOCWeapon>(Info.HitActor.Weapon.class), class<AOCWeapon>(Weapon.class));
+			}
+			if(`{GAMEMODE}PlayerController(Info.HitActor.Controller) != none)
+			{
+				`{GAMEMODE}PlayerController(Info.HitActor.Controller).NotifyPawnPerformedParry(PlayerReplicationInfo, StaminaDamage, Info.BoneName, class<AOCWeapon>(Weapon.class), class<AOCWeapon>(Info.HitActor.Weapon.class));
+			}
+		}
+		
+		//Parry means health damage is completely negated
+		
+		Info.HitDamage = StaminaDamage*1.5;
+		if(!bOutOfStamina)
+		{
+			Info.HitActor.ConsumeStamina(StaminaDamage*1.5);
+			`{GAMEMODE}g(WorldInfo.Game).DisplayDebugDamage(Info.HitActor, self, EDAM_Stamina, StaminaDamage);
+		}
+		if(wpnName == "Double Axe" || wpnName == "Poleaxe" || wpnName == "Bearded Axe" || wpnName == "Maul" || wpnName == "Grand Mace")
+			Info.HitDamage = Info.HitDamage * 1.5;
+	}
+	else if(Info.HitActor.StateVariables.bIsParrying)
+	{
+		AOCWeaponAttachment( Info.HitActor.CurrentWeaponAttachment ).PlayParrySound(false);
+		
+		StaminaDamage = AOCWeapon(Info.HitActor.Weapon).CalculateParryDamage(AOCWeapon(Info.Instigator.Weapon), Info.AttackType);
+			
+		if (!Info.HitActor.HasEnoughStamina(StaminaDamage))
+		{
+			StaminaDamage = Info.HitActor.Stamina;
+			Info.HitActor.ConsumeStamina(StaminaDamage);
+			// Regain 30 stamina
+			Info.HitActor.ConsumeStamina(-30.f);
+			AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), true, true, AOCWeapon(Weapon).bTwoHander);
+			Info.HitDamage = 0.0f;
+
+			bOutOfStamina = true;
+		}
+
+		`{GAMEMODE}g(WorldInfo.Game).DisplayDebugDamage(Info.HitActor, self, EDAM_Stamina, StaminaDamage);
+		if(`{GAMEMODE}PlayerController(Controller) != none)
+		{
+			`{GAMEMODE}PlayerController(Controller).NotifyPawnWasParried(Info.HitActor, StaminaDamage, Info.BoneName, class<AOCWeapon>(Info.HitActor.Weapon.class), class<AOCWeapon>(Weapon.class));
+		}
+		if(`{GAMEMODE}PlayerController(Info.HitActor.Controller) != none)
+		{
+			`{GAMEMODE}PlayerController(Info.HitActor.Controller).NotifyPawnPerformedParry(PlayerReplicationInfo, StaminaDamage, Info.BoneName, class<AOCWeapon>(Weapon.class), class<AOCWeapon>(Info.HitActor.Weapon.class) );
+		}
+
+		if(bOutOfStamina)
+		{
+			return true;
+		}
+		if(AOCWeapon(Info.HitActor.Weapon).fParryNegation<=10) {// 너무 가벼운 무기
+			if(wpnName == "Double Axe" || wpnName == "Poleaxe" || wpnName == "Bearded Axe" || wpnName == "Maul" || wpnName == "Grand Mace" || wpnName == "Messer" || wpnName == "Longsword" || wpnName == "Sword of War") {
+				AOCWeapon(Info.HitActor.Weapon).ActivateFlinch(true, Info.HitActor.GetHitDirection(Location), true, true, AOCWeapon(Weapon).bTwoHander);
+			}
+		}
+		Info.HitActor.ConsumeStamina(StaminaDamage);
+		// flinch if it's small
+		//Parry means health damage is completely negated
+		Info.HitDamage = 0.0f;
+		if(wpnName == "Double Axe" || wpnName == "Poleaxe" || wpnName == "Bearded Axe" || wpnName == "Maul" || wpnName == "Grand Mace")
+			Info.HitDamage = StaminaDamage*2.0;
+	}
+
+	return true;
+
+}
+
+simulated function bool ParryDetectionBonusAngles(out HitInfo Info, bool bCheckParryOnly)
+{
+	local vector x,y, z, myX, myY, myZ;
+	local Rotator rot, myRot;
+	
+	local Vector HitPawnForwardLevel;
+	
+	local Vector TraceStartPosition, ToTraceStartDir;
+	local Vector vFromPawnToPawn;
+	local float fAngle; // angle between defending pawn's forward direction and vector between two pawns
+	local float fAngleParry, fAngleHit;
+	local int RetResult;
+	local float fLocalAngleNarrow, fLocalAngleWide; // the defending angle range depends on the weapon
+	local int HitLR;
+	HitLR = 0;
+	if (StateVariables.bShieldEquipped)
+	{
+		fLocalAngleNarrow = fAngleNarrowShield;
+		fLocalAngleWide = fAngleWideShield;
+	}
+	else
+	{
+		fLocalAngleNarrow = fAngleNarrow;
+		fLocalAngleWide = fAngleWide;
+	}
+	`{GAMEMODE}PlayerController(Info.HitActor.Controller).ClientDisplayConsoleMessage(fLocalAngleNarrow);
+	`{GAMEMODE}PlayerController(Info.Instigator.Controller).ClientDisplayConsoleMessage(fLocalAngleNarrow);
+	// get other pawn's forward axis
+	rot = Info.HitActor.GetViewRotation();
+	GetAxes(rot, x, y, z);
+
+	// get our pawn's forward axis
+	myRot = GetViewRotation();
+	GetAxes(myRot, myX, myY, myZ);
+	
+	HitPawnForwardLevel = x;
+	HitPawnForwardLevel.Z = 0.0f;
+	
+	// determine where the attacker stands in relation to the position of the defender
+	vFromPawnToPawn = Location - Info.HitActor.Location;
+
+	fAngle = Acos((HitPawnForwardLevel dot vFromPawnToPawn)/ (VSize(HitPawnForwardLevel) * VSize(vFromPawnToPawn))) * 180.0f / Pi;
+	//`{GAMEMODE}PlayerController(Info.HitActor.Controller).ClientDisplayConsoleMessage(fAngle);
+	//`{GAMEMODE}PlayerController(Info.Instigator.Controller).ClientDisplayConsoleMessage(fLAngle);
+	// if pawn is attacking from the front block, or minimize damage if parry
+	if (fAngle < 90.0f)
+	{
+		if (Info.HitActor.StateVariables.bIsActiveShielding && class<AOCDmgType_PierceProj>(Info.DamageType) != none)
+		{
+			`{GAMEMODE}PlayerController(Info.HitActor.Controller).ClientDisplayConsoleMessage("onShieldBlocking");
+			`{GAMEMODE}PlayerController(Info.Instigator.Controller).ClientDisplayConsoleMessage("onShieldBlocking");
+			return DetectSuccessfulParry(Info, RetResult, bCheckParryOnly, HitLR);
+		}
+		else
+		{
+			TraceStartPosition = AOCWeaponAttachment(CurrentWeaponAttachment).InitialTraceStartPosition;
+			ToTraceStartDir = Normal(TraceStartPosition - Info.HitActor.GetPawnViewLocation());
+			fAngleParry = Acos((ToTraceStartDir dot x)/VSize(x)) * 180.0f / Pi;
+
+			// Determine if a hit from left or right
+			fAngleHit = Acos((ToTraceStartDir dot y)/VSize(y)) * 180.0f / Pi;
+			if (fAngleHit <= 90.0f) {
+			`{GAMEMODE}PlayerController(Info.HitActor.Controller).ClientDisplayConsoleMessage("HitFromRight");
+			`{GAMEMODE}PlayerController(Info.Instigator.Controller).ClientDisplayConsoleMessage("HitFromRight");
+				HitLR = 1;
+				}
+			if (fAngleParry < fLocalAngleNarrow / 2)
+			{
+			`{GAMEMODE}PlayerController(Info.HitActor.Controller).ClientDisplayConsoleMessage("Narrow");
+			`{GAMEMODE}PlayerController(Info.Instigator.Controller).ClientDisplayConsoleMessage("Narrow");
+				if (!DetectSuccessfulParry(Info, RetResult, bCheckParryOnly, HitLR))
+					return false;
+				return true;
+			}
+			else if (fAngleParry < fLocalAngleWide / 2)
+			{
+			`{GAMEMODE}PlayerController(Info.HitActor.Controller).ClientDisplayConsoleMessage("Wide");
+			`{GAMEMODE}PlayerController(Info.Instigator.Controller).ClientDisplayConsoleMessage("Wide");
+				if (!DetectSuccessfulParry(Info, RetResult, bCheckParryOnly, HitLR))
+					return false;
+				return true;
+			}
+		}
+	}
+	
+	return false;
+}
+
+simulated function PlayZMenuVO(int index)
+{
+	local SoundCue voSound;
+
+	if (WorldInfo.NetMode == NM_DedicatedServer)
+		return;
+
+		if (AOCCTFPlayerController(Controller) == none || index != 4)
+		{
+			class<AOCPawnSoundGroup>(SoundGroupClass).static.getAOCZMenuVO(self, index, voSound);
+		}  
+		else if (AOCCTFPlayerController(Controller) != none && index == 4)
+		{
+			class<AOCPawnSoundGroup>(SoundGroupClass).static.GetCTFDynVO(self, voSound);
+		}
+
+		VOSoundComp.Stop();
+		VOSoundComp.SoundCue = voSound;
+		VOSoundComp.Play();
+
+		if (Role < ROLE_Authority || WorldInfo.NetMode == NM_STANDALONE || Worldinfo.NetMode == NM_ListenServer)
+		{
+			s_PlayVO(voSound);
+		}
+}
+
+simulated function PlayXMenuVO(int index)
+{
+	local SoundCue voSound;
+
+	if (WorldInfo.NetMode == NM_DedicatedServer)
+		return;
+		
+
+		class<AOCPawnSoundGroup>(SoundGroupClass).static.getAOCXMenuVO(self, index, voSound);
+		VOSoundComp.Stop();
+		VOSoundComp.SoundCue = voSound;
+		VOSoundComp.Play();
+
+		if (Role < ROLE_Authority || WorldInfo.NetMode == NM_STANDALONE || Worldinfo.NetMode == NM_ListenServer)
+		{
+			s_PlayVO(voSound);
+		}
+}

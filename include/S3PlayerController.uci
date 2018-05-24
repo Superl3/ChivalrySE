@@ -1,0 +1,284 @@
+var string LastKill;
+var int Streak;
+reliable client function ClientOnFirstSpawn()
+{
+	//Localize() will find the "WelcomeChatText" key in the "Instagib" section of "Instagib.XXX" where XXX is replaced with the user's language's name (English is "INT")
+	//ReceiveChatMessage("",Localize("Instagib", "WelcomeChatText", "Instagib"),EFAC_ALL,false,false,,false);
+	
+	//Only show this on first spawn. Afterwards, only the normal game mode header will show.
+	//ClientShowLocalizedHeaderText(Localize("Instagib","SpawnHeader","Instagib"),,Localize("Instagib","SpawnSubHeader","Instagib"),true,false);
+	
+	//ReceiveChatMessage("","You're playing Instagib mod. All hits, unless blocked, are instant kills. Respawn times are cut down. You can parry projectiles. Good luck!",EFAC_ALL,false,false,,false);
+	
+}
+
+reliable server function S_Suicide()
+{
+	if(`{GAMEMODE}Pawn(Pawn) != none)
+	{
+		// Take points away for suicide
+		PlayerReplicationInfo.Score -= 10;
+		bJustSuicided =  true;
+
+		`{GAMEMODE}Pawn(Pawn).ReplicatedHitInfo.DamageString = "5";
+		`{GAMEMODE}Pawn(Pawn).ReplicatedHitInfo.DamageType = class'AOCDmgType_Swing';
+		Pawn.TakeDamage(1000.0f, none, Vect(0.0f,0.0f,0.0f),Vect(0.0f,0.0f,0.0f), class'AOCDmgType_Swing');
+	}
+}
+
+simulated function int GetViewHealth()
+{
+	local Actor myViewTarget;
+	local Vector Loc,Norm;
+	local Vector Start,End;
+	local Vector PawnEnd;
+	
+	if (Pawn == none)
+		return 0;
+	Start = Pawn.GetPawnViewLocation();
+	End = Pawn.GetPawnViewLocation() + Vector(Pawn.GetViewRotation()) * 200;
+	myViewTarget = Trace( Loc, Norm, End, Start, true );
+	if (myViewTarget == none)
+	{
+		PawnEnd = Pawn.GetPawnViewLocation() + Vector(Pawn.GetViewRotation()) * 3000;
+		myViewTarget = Trace( Loc, Norm, PawnEnd, Start, true );
+		if (myViewTarget == none)
+			return 0;
+		else if (`{GAMEMODE}Pawn(myViewTarget) != none)
+		{
+			//ClientDisplayConsoleMessage("myViewTarget Pawn Exist");
+			
+			return AOCPRI(`{GAMEMODE}Pawn(MyViewTarget).PlayerReplicationInfo).CurrentHealth;
+		}
+		return 0;
+	}
+	else
+	{
+		//	ClientDisplayConsoleMessage("myViewTarget Pawn Exist2");
+			return AOCPRI(`{GAMEMODE}Pawn(MyViewTarget).PlayerReplicationInfo).CurrentHealth;
+	}
+}
+
+state Spectating {
+	simulated function int GetViewHealth() {
+			local Actor myViewTarget;
+			local `{GAMEMODE}Pawn PawnTarget;
+			local Vector Loc,Norm;
+			local Vector Start,End;
+			//ClientDisplayConsoleMessage("Spectating1");
+
+			if (SavedRealViewTarget != none)
+			{
+				return AOCPRI(SavedRealViewTarget).CurrentHealth;
+			}
+			Start = CalcViewLocation;
+			End = CalcViewLocation + Vector(CalcViewRotation) * 600;
+			myViewTarget = Trace( Loc, Norm, End, Start, true );
+
+			PawnTarget = `{GAMEMODE}Pawn(myViewTarget);
+			if (PawnTarget != none)
+			{
+				if (PawnTarget.PlayerReplicationInfo == none)
+					return 0;
+					
+			return AOCPRI(PawnTarget.PlayerReplicationInfo).CurrentHealth;
+			}
+
+			return 0;
+	}
+}
+
+unreliable server function ServerUpdatePing(int NewPing)
+{
+	`{GAMEMODE}g(WorldInfo.Game).RCon.GameEvent_UpdatePing(PlayerReplicationInfo, NewPing);
+	super(UTPlayerController).ServerUpdatePing(NewPing);
+}
+
+exec function aoc_DrawTracerHitDetails( bool draw )
+{
+		bDrawWeaponTracers = draw;
+		bDrawTracerHitDetails = draw;
+}
+event PlayerTick(float DeltaTime) {
+	local ASColorTransform TempColorTransform;
+	local ASDisplayInfo DI;
+	super.PlayerTick(DeltaTime);
+	if(IsTimerActive('Clear_Notify_Kill')) {
+		DI = AOCBaseHUD(myHUD).HUD.MainHUD.HintIcon.GetDisplayInfo();
+		DI.X = 28;
+		DI.Y = -24;
+		ClientDisplayConsoleMessage(DI.Alpha);
+		TempColorTransform.multiply.R = 1;
+		TempColorTransform.multiply.G = 0;
+		TempColorTransform.multiply.B = 0;
+		AOCBaseHUD(myHUD).HUD.MainHUD.HintIcon.SetColorTransform(TempColorTransform);
+		AOCBaseHUD(myHUD).HUD.MainHUD.HintIcon.SetDisplayInfo(DI);
+		AOCBaseHUD(myHUD).HUD.MainHUD.HintIcon.SetString("source", "img://UI_HUD_SWF.hud_xhair_icon_skull");
+		AOCBaseHUD(myHUD).HUD.MainHUD.HintText.SetText("You Killed "$LastKill);
+		AOCBaseHUD(myHUD).HUD.MainHUD.HintProgress.SetVisible(false);
+		AOCBaseHUD(myHUD).HUD.MainHUD.HintCrosshair.SetVisible(true);
+	}
+}
+exec function EnableParryDebug(bool b)
+	{
+		S_EnableParryDebug(b);
+	}
+
+	reliable server function S_EnableParryDebug(bool b)
+	{
+		bEnableParryDebug = b;
+	}
+
+	exec function StartFire( optional byte FireModeNum )
+{
+	local `{GAMEMODE}Pawn AOCP;
+	
+	AOCP = `{GAMEMODE}Pawn(Pawn);
+
+	if ( WorldInfo.Pauser == PlayerReplicationInfo )
+	{
+		SetPause( false );
+		return;
+	}
+	
+	if (AOCP != none)
+	{
+	//	if(AOCP.onSwitchingChk)
+	//		return;
+		// sprinting is always the second to last firing state
+		if (AOCP.StateVariables.bIsSprinting && AOCP.bIsSprintMaxSpeed && !AOCP.StateVariables.bIsManualJumpDodge &&
+			FireModeNum == Attack_Sprint && !AOCP.StateVariables.bIsAttacking && AOCP.StateVariables.bCanSprintAttack
+			&& AOCP.PawnFamily.bCanSprintAttack && !ScriptBlockedInputs[EINBLOCK_AttackSprint])
+		{
+			if(!AOCP.HasEnoughStamina(20))
+			{
+				return;
+			}
+		}
+		else 
+		{
+			if ( FireModeNum == Attack_Sprint)
+				return;
+		}
+		
+		if ( FireModeNum == Attack_Parry && ScriptBlockedInputs[EINBLOCK_Block]
+		  || FireModeNum == Attack_Slash && ScriptBlockedInputs[EINBLOCK_AttackSlash]
+		  || FireModeNum == Attack_Stab && ScriptBlockedInputs[EINBLOCK_AttackStab]
+		  || FireModeNum == Attack_Overhead && ScriptBlockedInputs[EINBLOCK_AttackOverhead]
+		  || FireModeNum == Attack_Shove && ScriptBlockedInputs[EINBLOCK_AttackShove])
+		{
+			return;
+		}
+		
+		if (AOCP.StateVariables.bCanParry && FireModeNum == Attack_Parry)
+		{
+			LastAttack = Attack_Parry;
+			LastFireTime = WorldInfo.TimeSeconds;
+			AOCP.StartFire(Attack_Parry); // Always pass the commnad to start parry. Don't look at bCanAttack.
+			return;
+		}
+
+		if (FireModeNum == Attack_Shove && !AOCP.HasEnoughStamina(AOCP.PawnFamily.iKickcost))
+		{
+			AOCP.PlayLowStaminaGrunt();
+			return;
+		}
+
+		if(AOCP.DodgeSM.bQueueDodgeAttack)
+		{
+			LastAttack = EAttack(FireModeNum);
+			LastFireTime = WorldInfo.TimeSeconds;
+			AOCP.DodgeSM.QueueAttack(FireModeNum);
+			return;
+		}
+
+		if (!bCinematicMode && AOCP.StateVariables.bCanAttack)
+		{
+			LastAttack = EAttack(FireModeNum);
+			LastFireTime = WorldInfo.TimeSeconds;
+			AOCP.StartFire(FireModeNum);
+		}
+
+	}
+	else 
+	{
+		// Pawn isn't an AOCPawn but could be a Vehicle
+		super(UTPlayerController).StartFire( FireModeNum );
+	}
+}
+	
+exec function aoc_superl3()
+{
+		superl3();
+}	
+exec function aoc_superl4()
+{
+		superl4();
+}	
+
+reliable client function superl3()
+{
+	local EHintCrosshairImg Img;
+	Img = EHX_VolCap;
+	AOCBaseHUD(myHUD).SetOverrideHintCrosshair(true, Img, "test11");	
+	AOCBaseHUD(myHUD).EarlyExitSelection();
+	AOCBaseHUD(myHUD).ShowHUD();
+	EnableGuiPpc();
+	AOCBaseHUD(myHUD).AddHeaderText("acd", 'AOCRoundInProgress');
+	AOCBaseHUD(myHUD).HUD.MainHUD.ShowLargeHeaderText(true, "abc", "def", false, false);
+}
+reliable client function superl4()
+{
+	local EHintCrosshairImg Img;
+	Img = EHX_VolCap;
+	AOCBaseHUD(myHUD).SetOverrideHintCrosshair(false, Img, "test11");	
+	DisableGuiPpc();
+	AOCBaseHUD(myHUD).ClearPersistentHeader('AOCRoundInProgress');
+	AOCBaseHUD(myHUD).HUD.MainHUD.ShowLargeHeaderText(false, "");
+}
+
+exec function DoF10()
+{
+	if(!ScriptBlockedInputs[EINBLOCK_F10] && Pawn != none && Pawn.Health > 0 && GetTimerCount('S_DoF10') == -1.f && AOCPawn(Pawn) != none)
+	{
+		S_SendF10Message();
+		SetTimer(1.0f, false, 'S_DoF10');
+	}
+}
+
+reliable server function S_DoF10()
+{
+	if(AOCPawn(Pawn) != none)
+	{
+		AOCPawn(Pawn).ReplicatedHitInfo.DamageString = "&";
+
+		// Take points away for suicide
+		PlayerReplicationInfo.Score -= 10;
+
+		Pawn.TakeDamage(500.0f, none, Vect(0.0f,0.0f,0.0f),Vect(0.0f,0.0f,0.0f), class'AOCDmgType_Generic');
+	}
+}
+
+exec function rankbased()
+{
+	ClientDisplayConsoleMessage("RANKBASED START :::::1::: ");
+	`{GAMEMODE}g(WorldInfo.Game).RankBasedAutobalance();
+}
+
+function Notify_Kill(string EnemyName) {
+	if(Streak > 2) {
+		AOCBaseHUD(myHUD).AddHeaderText(Streak$"  Kill Streak!");
+		AOCBaseHUD(myHUD).HUD.MainHUD.ShowLargeHeaderText(true, Streak$"  Kill Streak!",, false, false);
+		PlaySound(SoundCue'A_Meta.rank_up',true);
+	}
+	LastKill = EnemyName;
+	SetTimer(2.5f, false, 'Clear_Notify_Kill');
+}
+function Clear_Notify_Kill (){
+	local ASColorTransform TempColorTransform;
+	AOCBaseHUD(myHUD).HUD.MainHUD.HintCrosshair.SetVisible(false);
+	TempColorTransform.multiply.R = 1;
+	TempColorTransform.multiply.G = 1;
+	TempColorTransform.multiply.B = 1;
+	AOCBaseHUD(myHUD).HUD.MainHUD.HintIcon.SetColorTransform(TempColorTransform);
+}

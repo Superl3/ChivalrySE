@@ -1,0 +1,244 @@
+function DrawHUD()
+{
+	/*local AOCCaptureVolume CapVolume;
+	local KillInfo sKillInfo;	
+	local int StartIndictatorY;
+	local Vector PointVec, VectorDir;
+	local Vector2D ScreenPositionVec;*/
+	local ASColorTransform TempColorTransform;
+	local ASDisplayInfo DI;
+	local HUDMessage sHUDMes;
+	local EAOCFaction Faction;
+	local float PlayerDist;
+	local string ActorName, ActorText;
+	local ECrosshairInfoType ViewType;
+	local int curHealth;
+	curHealth = 0;
+	DI = HUD.MainHUD.HintIcon.GetDisplayInfo();
+	DI.Rotation = 0.0f;
+	HUD.MainHUD.HintIcon.SetDisplayInfo(DI);
+	TempColorTransform.multiply.R = 1;
+	TempColorTransform.multiply.G = 1;
+	TempColorTransform.multiply.B = 1;
+	HUD.MainHUD.HintIcon.SetColorTransform(TempColorTransform);
+	if (PlayerOwner == none)
+		return;
+
+	// draw HUD messages
+	if (AllHUDMessage.Length > 0)
+	{
+		Canvas.Font = Class'Engine'.Static.GetMediumFont();
+		Canvas.SetPos(Canvas.SizeX/2, Canvas.SizeY/2);
+		Canvas.DrawColor = OrangeColor;
+		foreach AllHUDMessage(sHUDMes)
+		{
+			Canvas.DrawText(sHUDMes.MessageText);
+		}
+	}
+
+	if (CharManager != none && CharManager.bInitialized)
+	{
+		CharManager.TimeElapsedSinceUpdate += RenderDelta;
+		if (CharManager.TimeElapsedSinceUpdate > 0.5f)
+		{
+			CharManager.UpdateRelevant();
+		}
+
+		//If the MOTD refuses to come through, skip it (extra safety on HS 286 because we don't have a repro case)
+		if(CharManager.StartedWaitingForMotdTime >= 0 && Worldinfo.TimeSeconds - CharManager.StartedWaitingForMotdTime > 5.f)
+		{
+			CharManager.bSkipMotd = true;
+			CharManager.StartFlow();
+		}
+	}
+
+	if (HUD != none)
+	{
+		HUD.TimeElapsedSinceUpdate += RenderDelta;
+		if (HUD.TimeElapsedSinceUpdate > 0.7f)
+		{
+			HUD.UpdateRelevant();
+
+			if(EscapeMenu != none)
+			{
+				EscapeMenu.UpdateRelevant();
+			}
+		}
+	}
+
+	UpdateDynamicHUDMarkers();
+
+	
+
+	if (`{GAMEMODE}Pawn(PlayerOwner.Pawn) == none && AOCSW_Base(PlayerOwner.Pawn) == none)
+	{
+		// Make sure no name is displayed and turn off information box
+		UpdatePlayerName("", EFAC_NONE);
+		
+		//This, purely for displaying player name when in Spectator Follow (until we have proper HUD support for it)
+		if(`{GAMEMODE}Pawn(PlayerOwner.ViewTarget) == none || !bOverrideSubXhair)
+		{
+			ShowInfomationBox(false);
+		}
+		else
+		{
+			ShowInfomationBox(true, OverrideText, "");
+		}
+		
+		//Player names when you're looking at them in Spectator Freecam
+		curHealth = `{GAMEMODE}PlayerController(PlayerOwner).GetViewHealth();
+		ActorName = `{GAMEMODE}PlayerController(PlayerOwner).GetViewName(Faction, PlayerDist, ActorText, ViewType);
+	
+		ShowHintCrosshair(false, EHX_Default, "");
+		if(ActorName != "None" && ViewType == EXHAIRINFO_Player)
+		{
+			UpdatePlayerName(ActorName $ "(" $ curHealth $ "%)", Faction);
+
+			// Update Melee Crosshair
+			if (AOCDuelGRI(WorldInfo.GRI) == none && CDWDuelGRI(WorldInfo.GRI) == none && AOCFFAGRI(Worldinfo.GRI) == none)
+			{
+				UpdateMeleeCrosshair(true, Faction != `{GAMEMODE}PlayerController(PlayerOwner).CurrentFamilyInfo.FamilyFaction);
+			}
+			else
+			{
+				UpdateMeleeCrosshair(true, true);
+			}
+		}
+		else
+		{
+			UpdatePlayerName("", Faction);
+
+			// Make sure Information box is hidden
+			ShowInfomationBox(false);
+
+			UpdateMeleeCrosshair(false);
+		}
+		
+		bForceHintCrosshair = false;
+		ShowHintCrosshair(false, EHX_Default, "");
+		// Update Melee Crosshair
+		UpdateMeleeCrosshair(false);
+		return;
+	}
+	else if (AOCSW_Base(PlayerOwner.Pawn) != none)
+	{
+		ShowHintCrosshair(false, EHX_Default, "");
+		UpdateMeleeCrosshair(false);
+		TurnOnRangeCrosshair();
+		if (bOverrideSubXhair)
+		{
+			ShowInfomationBox(true, OverrideText, "");
+		}
+		else
+			ShowInfomationBox(false);
+		return;
+	}
+
+	super(UDKHUD).DrawHUD();
+
+	if (bDebugSpeed)
+	{
+		Canvas.Font = Font'AOC_UI_Common.DescriptionFont';
+		Canvas.SetPos(Canvas.SizeX - 40.0f, Canvas.SizeY - Canvas.Font.GetMaxCharHeight() );
+		Canvas.DrawColor = RedColor;
+		Canvas.DrawText(string(VSize(`{GAMEMODE}PlayerController(PlayerOwner).Pawn.Velocity)), true);
+
+		Canvas.SetPos(Canvas.SizeX - 70.0f, Canvas.SizeY - 2.5 * Canvas.Font.GetMaxCharHeight() );
+		Canvas.DrawText(string(`{GAMEMODE}Pawn(`{GAMEMODE}PlayerController(PlayerOwner).Pawn).SprintTime)@string(`{GAMEMODE}Pawn(PlayerOwner.Pawn).StateVariables.bCanSprint), true);
+	}
+
+	if (bDebugReach)
+	{
+		Canvas.Font = Font'AOC_UI_Common.DescriptionFont';
+		Canvas.SetPos(Canvas.SizeX - 40.0f, Canvas.SizeY - Canvas.Font.GetMaxCharHeight() );
+		Canvas.DrawColor = RedColor;
+		Canvas.DrawText(string(AOCWeaponAttachment(`{GAMEMODE}Pawn(PlayerOwner.Pawn).CurrentWeaponAttachment).fLongestWeaponReach), true);
+	}
+
+
+	// Handle Override of the Hint Crosshair First
+	if (bForceHintCrosshair)
+	{
+		ShowHintCrosshair(true , ForcedHintXhairImg, ForcedHintXhairText);
+	}
+	else // 플레이중일떄
+	{
+		curHealth = `{GAMEMODE}PlayerController(PlayerOwner).GetViewHealth();
+		ActorName = `{GAMEMODE}PlayerController(PlayerOwner).GetViewName(Faction, PlayerDist, ActorText, ViewType);
+		if (ViewType == EXHAIRINFO_Use)
+		{
+			// Usable Object
+			if(!`{GAMEMODE}PlayerController(PlayerOwner).IsTimerActive('Clear_Notify_Kill'))
+				ShowHintCrosshair(true, EHX_Use, ActorName);
+		}
+		else
+		{
+			if(!`{GAMEMODE}PlayerController(PlayerOwner).IsTimerActive('Clear_Notify_Kill'))
+				ShowHintCrosshair(false, EHX_Default, "");
+			if(ActorName != "None" )
+			{
+				if (ViewType == EXHAIRINFO_Player)
+				{
+					UpdatePlayerName(ActorName $ "(" $ curHealth $ "%)", Faction);
+
+					// Update Melee Crosshair
+					if (AOCDuelGRI(WorldInfo.GRI) == none && CDWDuelGRI(WorldInfo.GRI) == none && AOCFFAGRI(Worldinfo.GRI) == none)
+					{
+						UpdateMeleeCrosshair(true, Faction != `{GAMEMODE}PlayerController(PlayerOwner).CurrentFamilyInfo.FamilyFaction);
+						if(Faction == `{GAMEMODE}PlayerController(PlayerOwner).CurrentFamilyInfo.FamilyFaction && !`{GAMEMODE}PlayerController(PlayerOwner).IsTimerActive('Clear_Notify_Kill')) {
+							TempColorTransform.multiply.R = 1;
+							TempColorTransform.multiply.G = 0;
+							TempColorTransform.multiply.B = 0;
+							DI = HUD.MainHUD.HintIcon.GetDisplayInfo();
+							DI.X = 63;
+							DI.Y = -30.5;
+							DI.Rotation = 45.0f;
+						//	DI.X = HUD.MainHUD.HintIcon.GetDisplayInfo().X;
+						//	DI.Y = HUD.MainHUD.HintIcon.GetDisplayInfo().Y;
+							HUD.MainHUD.HintIcon.SetDisplayInfo(DI);
+							HUD.MainHUD.HintIcon.SetString("source", "img://UI_HUD_SWF.hud_xhair_scope");
+							HUD.MainHUD.HintText.SetText("YOUR TEAM, DO NOT ATTACK");
+							HUD.MainHUD.HintIcon.SetColorTransform(TempColorTransform);
+							HUD.MainHUD.HintProgress.SetVisible(false);
+							HUD.MainHUD.HintCrosshair.SetVisible(true);
+							//HUD.MainHUD.HintProgress.SetVisible(false);
+						}
+					}
+					else
+					{
+						UpdateMeleeCrosshair(true, true);
+					}
+
+				}
+				else if (ViewType == EXHAIRINFO_Box)
+				{
+					// Actor that displays an information box or text under screen
+					ShowInfomationBox(true, ActorName, ActorText);
+					UpdateMeleeCrosshair(false);
+				}
+				else if(ViewType == EXHAIRINFO_BoxWithUse)
+				{
+					if(!`{GAMEMODE}PlayerController(PlayerOwner).IsTimerActive('Clear_Notify_Kill'))
+						ShowHintCrosshair(true, EHX_Use, "");
+					// Actor that displays an information box or text under screen
+					ShowInfomationBox(true, ActorName, ActorText);
+					UpdateMeleeCrosshair(false);
+				}
+			}
+			else
+			{
+				UpdatePlayerName("", Faction);
+
+				// Make sure Information box is hidden
+				ShowInfomationBox(false);
+
+				UpdateMeleeCrosshair(false);
+			}
+		}
+	}
+
+	if (bOverrideSubXhair)
+	{
+		ShowInfomationBox(true, OverrideText, "");
+	}
+}

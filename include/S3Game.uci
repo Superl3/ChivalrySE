@@ -1,0 +1,1127 @@
+var config array<GameTypePrefix>	SDKPrefixes;
+var int sumAgatha, sumMason;
+var S3RCon RCon;
+var array<`{GAMEMODE}PlayerController> AgathaT, MasonT, Total;
+static event class<GameInfo> SetGameType(string MapName, string Options, string Portal) {
+	local string ThisMapPrefix;
+	local int i,pos;
+	local class<GameInfo> NewGameType;
+	
+	MapName = StripPlayOnPrefix( MapName );
+
+	// replace self with appropriate gametype if no game specified
+	pos = InStr(MapName,"-");
+	ThisMapPrefix = left(MapName,pos);
+	
+	for (i = 0; i < default.SDKPrefixes.length; i++)
+	{
+		if (default.SDKPrefixes[i].Prefix ~= ThisMapPrefix)
+		{
+			NewGameType = class<GameInfo>(DynamicLoadObject(default.SDKPrefixes[i].GameType,class'Class'));
+			if ( NewGameType != None )
+			{
+				return NewGameType;
+			}
+		}
+	}
+	
+	return super(UTTeamGame).SetGameType(MapName, Options, Portal);
+}
+
+function PerformOnFirstSpawn(Controller NewPlayer)
+{
+/*
+	local int team;
+			if(AOCPRI(`{GAMEMODE}PlayerController(NewPlayer).PlayerReplicationInfo.)GetCurrentClass() == ECLASS_Archer) {
+				team = 0;
+			}
+			else if(AOCPRI(`{GAMEMODE}PlayerController(NewPlayer).PlayerReplicationInfo).GetCurrentClass() == ECLASS_ManAtArms) {
+				team = 1;
+			}
+			else if(AOCPRI(`{GAMEMODE}PlayerController(NewPlayer).PlayerReplicationInfo).GetCurrentClass() == ECLASS_Vanguard) {
+				team = 2;
+			}
+			else if(AOCPRI(`{GAMEMODE}PlayerController(NewPlayer).PlayerReplicationInfo).GetCurrentClass() == ECLASS_Knight) {
+				team = 3;
+			}
+	if(`{GAMEMODE}PlayerController(NewPlayer) != none)
+	{
+		sumTeamRank();
+		if(sumAgatha > sumMason) {
+			`{GAMEMODE}PlayerController(NewPlayer).SetNewClass(AOCGRI(GameReplicationInfo).FamilyInfos[team + 5]);
+		}
+		else {
+			`{GAMEMODE}PlayerController(NewPlayer).SetNewClass(AOCGRI(GameReplicationInfo).FamilyInfos[team]);
+		}
+		`{GAMEMODE}PlayerController(NewPlayer).ClientOnFirstSpawn();
+	}
+*/
+	//Do last do that game mode chat message comes after the Instagib one
+	super.PerformOnFirstSpawn(NewPlayer);
+}
+
+function ChangeName( Controller Other, coerce string S, bool bNameChange )
+{
+	super(UTTeamGame).ChangeName(Other, S, bNameChange);
+	RCon.GameEvent_NameChanged(Other.PlayerReplicationInfo);
+}
+
+function BroadcastMessageToPlayer(PlayerController Target, string Message)
+{
+	`{GAMEMODE}PlayerController(Target).ReceiveChatMessage(Message, EFAC_ALL);
+}
+
+// Handle player coming in from seamless travel
+// Force show team select.
+event HandleSeamlessTravelPlayer(out Controller C)
+{
+	local PlayerController PC, NewPC;
+
+	if (AOCAIController(C) != none) // Don't let AI's travel.
+		return;
+
+	PC = PlayerController(C);
+	if (PC != None)
+	{
+		PC.bPendingNotifyLoadedWorld = false;
+
+		if (PC.Player != None)
+		{
+			// we need to spawn a new PlayerController to replace the old one
+			NewPC = SpawnPlayerController(PC.Location, PC.Rotation);
+			if (NewPC == None)
+			{
+				PC.Destroy();
+				return;
+			}
+			else
+			{
+				PC.CleanUpAudioComponents();
+				PC.SeamlessTravelTo(NewPC);
+
+				NumPlayers++;
+				NumTravellingPlayers--;
+
+				// Carry over stat wrapper
+
+				AOCPlayerController(NewPC).StatWrapper = new(AOCPlayerController(NewPC)) AOCPlayerController(NewPC).StatWrapperClass;
+				AOCPlayerController(NewPC).StatWrapper.Initialize(AOCPlayerController(PC).StatWrapper);
+				AOCPlayerController(NewPC).DropCache = new(NewPC) class'AOCCustomizationPlayerDropCache';
+				AOCPlayerController(NewPC).DropCache.CopyFrom(AOCPlayerController(PC).DropCache);
+
+				NewPC.SeamlessTravelFrom(PC);
+				SwapPlayerControllers(PC, NewPC);
+				PC = NewPC;
+				C = NewPC;
+			}
+		}
+		else
+		{
+			PC.Destroy();
+		}
+	}
+
+	GenericPlayerInitialization(C);
+	if (bIsRealGame)
+	{
+		PerformRealGameActions(AOCPlayerController(C));
+	}
+}
+
+
+
+event GetSeamlessTravelActorList(bool bToEntry, out array<Actor> ActorList)
+{
+	local int i;
+	// always keep PlayerReplicationInfos and TeamInfos, so that after we restart we can keep players on the same team, etc
+	for (i = 0; i < WorldInfo.GRI.PRIArray.Length; i++)
+	{
+		if (!AOCPRI(WorldInfo.GRI.PRIArray[i]).bIsBot)
+		{
+			WorldInfo.GRI.PRIArray[i].bFromPreviousLevel = true;
+			WorldInfo.GRI.PRIArray[i].bForceNetUpdate = true;
+			AOCPRI(WorldInfo.GRI.PRIArray[i]).MyFamilyInfo = none;
+			AOCPRI(WorldInfo.GRI.PRIArray[i]).PreSeamlessTravelReset();
+			ActorList[ActorList.length] = WorldInfo.GRI.PRIArray[i];
+		}
+	}
+
+	if (bToEntry)
+	{
+		// keep general game state until we transition to the final destination
+		ActorList[ActorList.length] = WorldInfo.GRI;
+		if (BroadcastHandler != None)
+		{
+			ActorList[ActorList.length] = BroadcastHandler;
+		}
+	}
+
+	// Keep the AccessControl persistent, as it needs to >always< be ready for handling auth callbacks
+	if (AccessControl != none)
+	{
+		ActorList[ActorList.length] = AccessControl;
+	}
+
+	// keep TeamInfos around so we can keep players' team
+	for (i = 0; i < WorldInfo.GRI.Teams.length; i++)
+	{
+		if (WorldInfo.GRI.Teams[i] != None && (bToEntry || WorldInfo.GRI.Teams[i].Size > 0))
+		{
+			ActorList[ActorList.length] = WorldInfo.GRI.Teams[i];
+		}
+	}
+	
+	// Keep the remote console class persistent
+	if (RCon != none)
+	{
+		ActorList[ActorList.length] = RCon;
+	}
+
+}
+
+function BroadcastMessage(PlayerController Sender, string Message, EAOCFaction DesignatedTeam, optional bool bSystemMessage = false, optional bool bUseCustomColor = false, optional string Col) // #XXXXXX color code.
+{
+	local `{GAMEMODE}PlayerController PC;
+	local bool bNotifyReady;
+
+	if(Left(Message, 1) == " ")
+	{
+		Message = Split(Message, " ", true);
+	}
+
+	if (`{GAMEMODE}PlayerController(Sender) != none)
+	{
+		RCon.GameEvent_BroadcastMessage(Sender.PlayerReplicationInfo, Message, DesignatedTeam);
+		if (DesignatedTeam == EFAC_NONE)
+		{
+			`{GAMEMODE}PlayerController(Sender).ReceiveChatMessage(Message, AOCPRI(Sender.PlayerReplicationInfo).GetCurrentTeam());
+			return;
+		}
+		else if(bTournamentMode && IsInState('AOCPreRound'))
+		{
+			if(Left(Message, 5) ~= "ready" || Left(Message, 8) ~= "notready" || Left(Message, 6) ~= "!ready")
+			{
+				`{GAMEMODE}PlayerController(Sender).bTournamentReady = !`{GAMEMODE}PlayerController(Sender).bTournamentReady;
+				AOCPRI(Sender.PlayerReplicationInfo).bTournamentReady = `{GAMEMODE}PlayerController(Sender).bTournamentReady;
+				bNotifyReady = true;
+			}
+			if(Left(Message, 4) ~= "team" || Left(Message, 8) ~= "teamname" || Left(Message, 5) ~= "!team")
+			{
+				if(AOCPRI(Sender.PlayerReplicationInfo).IsOnTeam(EFAC_AGATHA))
+				{
+					AOCGRI(GameReplicationInfo).AgathaNameOverride = Split(Message, " ", true);
+				}
+				else
+				{
+					AOCGRI(GameReplicationInfo).MasonNameOverride = Split(Message, " ", true);
+				}
+			}
+			if(Left(Message, 14) ~= "!adminreadyall" || Left(Message, 13) ~= "adminreadyall")
+			{
+				if(Sender.PlayerReplicationInfo.bAdmin)
+				{
+					AdminReadyAll();
+				}
+			}
+		}
+
+		foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC)
+		{
+			if (DesignatedTeam == EFAC_ALL || DesignatedTeam == AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam())
+			{
+				// Ignore messages from muted players
+				if ( !PC.IsPlayerMuted( Sender.PlayerReplicationInfo.UniqueId ) )
+				{
+					PC.ReceiveChatMessage(Message, AOCPRI(Sender.PlayerReplicationInfo).GetCurrentTeam(),,,,DesignatedTeam == AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam(), AOCPRI(Sender.PlayerReplicationInfo));
+				}
+			}
+		}
+
+		//These are reliable, so doing this after the above will make sure the message is diplayed after the chat message
+		if(bNotifyReady)
+		{
+			`{GAMEMODE}PlayerController(Sender).NotifyReady(`{GAMEMODE}PlayerController(Sender).bTournamentReady);
+		}
+	} 
+	else if (bSystemMessage)
+	{
+		foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC)
+		{
+			if (DesignatedTeam == AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() || DesignatedTeam == EFAC_ALL)
+				PC.ReceiveChatMessage(Message, DesignatedTeam,,bUseCustomColor, Col);
+		}
+	}
+}
+
+
+event PostLogin( playercontroller NewPlayer )
+{
+	local `{GAMEMODE}PlayerController PC;
+	local Actor A;
+	local string Address, StatGuid;
+	local int pos, i;
+	local Sequence GameSeq;
+	local array<SequenceObject> AllInterpActions;
+	
+
+	// manually incorporate super class implementations
+
+	// update player count
+	NumPlayers++;
+
+	// Tell the online subsystem the number of players in the game
+	UpdateGameSettingsCounts();
+
+	// save network address for re-associating with reconnecting player, after stripping out port number
+	Address = NewPlayer.GetPlayerNetworkAddress();
+	pos = InStr(Address,":");
+	NewPlayer.PlayerReplicationInfo.SavedNetworkAddress = (pos > 0) ? left(Address,pos) : Address;
+
+	// check if this player is reconnecting and already has PRI
+	FindInactivePRI(NewPlayer);
+
+	if ( !bDelayedStart )
+	{
+		// start match, or let player enter, immediately
+		bRestartLevel = false;	// let player spawn once in levels that must be restarted after every death
+		if ( 	bWaitingToStartMatch )
+			StartMatch();
+		else
+			RestartPlayer(newPlayer);
+		bRestartLevel = Default.bRestartLevel;
+	}
+
+	if (NewPlayer.Pawn != None)
+	{
+		NewPlayer.Pawn.ClientSetRotation(NewPlayer.Pawn.Rotation);
+	}
+
+	NewPlayer.ClientCapBandwidth(NewPlayer.Player.CurrentNetSpeed);
+	UpdateNetSpeeds();
+
+	GenericPlayerInitialization(NewPlayer);
+
+	// Tell the new player the stat guid
+	if (GameReplicationInfo.bMatchHasBegun && OnlineSub != None && OnlineSub.StatsInterface != None)
+	{
+		// Get the stat guid for the server
+		StatGuid = OnlineSub.StatsInterface.GetHostStatGuid();
+		if (StatGuid != "")
+		{
+			NewPlayer.ClientRegisterHostStatGuid(StatGuid);
+		}
+	}
+
+	// Tell the player to disable voice by default and use the push to talk method
+	NewPlayer.ClientStopNetworkedVoice();
+	if (NewPlayer.PlayerReplicationInfo.bOnlySpectator)
+	{
+		NewPlayer.ClientGotoState('Spectating');
+		NewPlayer.PlayerReplicationInfo.bIsSpectator = true;
+		AOCPRI(NewPlayer.PlayerReplicationInfo).bIsVoluntarySpectator = true;
+		NewPlayer.PlayerReplicationInfo.bNetDirty = true;
+	}
+
+	// add the player to any matinees running so that it gets in on any cinematics already running, etc
+	GameSeq = WorldInfo.GetGameSequence();
+	if (GameSeq != None)
+	{
+		// find any matinee actions that exist
+		GameSeq.FindSeqObjectsByClass(class'SeqAct_Interp', true, AllInterpActions);
+
+		// tell them all to add this PC to any running Director tracks
+		for (i = 0; i < AllInterpActions.Length; i++)
+		{
+			SeqAct_Interp(AllInterpActions[i]).AddPlayerToDirectorTracks(NewPlayer);
+		}
+	}
+
+	PC = `{GAMEMODE}PlayerController(NewPlayer);
+	if (PC != None)
+	{
+		if (PC.StatWrapper == none)
+		{
+			PC.StatWrapper = new(PC) PC.StatWrapperClass;
+			PC.StatWrapper.Initialize(none);
+		}
+		if(PC.DropCache == none)
+		{
+			PC.DropCache = new(PC) class'AOCCustomizationPlayerDropCache';
+		}
+
+		PC.PlayStartUpMessage(StartupStage);
+		PC.ClientSetSpeechRecognitionObject(SpeechRecognitionData);
+
+		PC.ClientVoteMapListIsDirty();
+		SendVoteMapListToPC(PC);
+		PC.ClientVoteMapListIsComplete();
+
+		if(AOCGRI(Worldinfo.GRI).Speed < 0.0f)
+		{
+			PC.NotifyPaused();
+		}
+	}
+
+	//@hack: unfortunately the character construction process requires game tick so we can't be paused while
+	// clients are doing it or they will appear to hang on the loading screen
+	Pausers.length = 0;
+	if(WorldInfo.Pauser != none)
+	{
+		NextTickPauser = WorldInfo.Pauser;
+	}
+	WorldInfo.Pauser = None;
+
+	if (bIsRealGame)
+	{
+		PerformRealGameActions(PC);
+	}   
+	RCon.GameEvent_PlayerConnect(NewPlayer.PlayerReplicationInfo);
+	if ( LocalPlayer(NewPlayer.Player) == None )
+		return;
+
+	// if local player, notify level actors
+	ForEach AllActors(class'Actor', A)
+		A.NotifyLocalPlayerTeamReceived();
+}
+/** When player logs out */
+function Logout( Controller Exiting )
+{
+	local TeamInfo OldTeam;
+	local int i;
+	local bool bFound;
+	local UTPlayerReplicationInfo PRI;
+	local UTPlayerController ExitingPC;
+	local PlayerController PC;
+	local int PCIndex;
+	
+	RCon.GameEvent_PlayerDisconnect(Exiting.PlayerReplicationInfo);
+
+	if (!WorldInfo.IsInSeamlessTravel() && Exiting.PlayerReplicationInfo.bFromPreviousLevel)
+	{
+		OldTeam = Exiting.PlayerReplicationInfo.Team;
+	}
+	
+	PRI = UTPlayerReplicationInfo(Exiting.PlayerReplicationInfo);
+	if ( PRI.bHasFlag )
+	{
+		PRI.GetFlag().Drop();
+	}
+
+	// Remove from all mute lists so they can rejoin properly
+	ExitingPC = UTPlayerController( Exiting );
+	if( ExitingPC != None )
+	{
+		RemovePlayerFromMuteLists( ExitingPC );
+	}
+
+	PC = PlayerController(Exiting);
+	if ( PC != None )
+	{
+		if (AccessControl != None &&
+			AccessControl.AdminLogout( PlayerController(Exiting) ))
+		{
+			AccessControl.AdminExited( PlayerController(Exiting) );
+		}
+
+		NumPlayers--;
+
+		// This person has left during an arbitration period
+		if (bUsingArbitration && bHasArbitratedHandshakeBegun && !bHasEndGameHandshakeBegun)
+		{
+		}
+		// Unregister the player from the online layer
+		UnregisterPlayer(PC);
+		// Remove from the arbitrated PC list if in an arbitrated match
+		if (bUsingArbitration)
+		{
+			// Find the PC in the list and remove it if found
+			PCIndex = ArbitrationPCs.Find(PC);
+			if (PCIndex != INDEX_NONE)
+			{
+				ArbitrationPCs.Remove(PCIndex,1);
+			}
+		}
+	}
+	//notify mutators that a player exited
+	if (BaseMutator != None)
+	{
+		BaseMutator.NotifyLogout(Exiting);
+	}
+	if ( PC != None )
+	{
+		UpdateNetSpeeds();
+	}
+
+	if (Exiting.IsA('UTBot') && !UTBot(Exiting).bSpawnedByKismet)
+	{
+		i = ActiveBots.Find('BotName', Exiting.PlayerReplicationInfo.PlayerName);
+		if (i != INDEX_NONE)
+		{
+			ActiveBots[i].bInUse = false;
+		}
+		NumBots--;
+	}
+
+	if (AOCAIController(Exiting) != none && AOCPRI(Exiting.PlayerReplicationInfo).bDisplayOnScoreboard)
+	{
+		NumBots--;
+	}
+
+	if (MaxLives > 0)
+	{
+		CheckMaxLives(None);
+	}
+	// clean up team from old level if necessary
+	//@warning: assumes RemoveFromTeam() call is *after* Logout() in Controller::Destroyed()
+	if (OldTeam != None && OldTeam.Size <= 1)
+	{
+		for (i = 0; i < Teams.Length; i++)
+		{
+			if (Teams[i] == OldTeam)
+			{
+				bFound = true;
+				break;
+			}
+		}
+		if (!bFound)
+		{
+			OldTeam.Destroy();
+		}
+	}
+	
+	if(Exiting == VoteKickTarget)
+	{
+		EndKickVote(true);
+	}
+	
+	`{GAMEMODE}PlayerController(Exiting).DestroyHUD();
+	RemoveFromQueue(Exiting);
+
+	// Tell the online subsystem the number of players in the game
+	UpdateGameSettingsCounts();
+	sumTeamRank();
+	i = sumAgatha - sumMason;
+	if(i<0) i*=-1;
+	if(i > 20)
+		RankBasedAutobalance();
+}
+
+
+function ProcessServerTravel(string URL, optional bool bAbsolute)
+{
+	local PlayerController LocalPlayer;
+	local bool bSeamless;
+	local string NextMap;
+	local Guid NextMapGuid;
+	local int OptionStart;
+	local Controller C;
+	local AOCAIController AI;
+	
+	if(InitialNumBotsToSpawn > 0)
+	{
+		URL = URL$"?NumPlay="$InitialNumBotsToSpawn;
+	}
+	if(InitialNumDummyBotsToSpawn > 0)
+	{
+		URL = URL$"?NumDummies="$InitialNumDummyBotsToSpawn;
+	}
+	RCon.GameEvent_MapChanged_New(`{GAMEMODE}g(Worldinfo.Game).GetCurrentMap());
+	if (!IsInState('MatchOver'))
+	{
+		foreach WorldInfo.AllControllers(class'Controller', C)
+		{
+			C.GameHasEnded();
+		}
+		GotoState('MatchOver');
+	}
+
+	bLevelChange = true;
+
+	// force an old style load screen if the server has been up for a long time so that TimeSeconds doesn't overflow and break everything
+	bSeamless = (bUseSeamlessTravel && WorldInfo.TimeSeconds < 172800.0f); // 172800 seconds == 48 hours
+
+	if (InStr(Caps(URL), "?RESTART") != INDEX_NONE)
+	{
+		NextMap = string(WorldInfo.GetPackageName());
+	}
+	else
+	{
+		OptionStart = InStr(URL, "?");
+		if (OptionStart == INDEX_NONE)
+		{
+			NextMap = URL;
+		}
+		else
+		{
+			NextMap = Left(URL, OptionStart);
+		}
+	}
+	NextMapGuid = GetPackageGuid(name(NextMap));
+
+	// Notify clients we're switching level and give them time to receive.
+	LocalPlayer = ProcessClientTravel(URL, NextMapGuid, bSeamless, bAbsolute);
+
+	//Clear out old bot controllers
+	foreach Worldinfo.AllControllers(class'AOCAIController', AI)
+	{
+		AI.Destroy();
+	}
+	
+	WorldInfo.NextURL = URL;
+	if (WorldInfo.NetMode == NM_ListenServer && LocalPlayer != None)
+	{
+		WorldInfo.NextURL $= "?Team="$LocalPlayer.GetDefaultURL("Team")
+							$"?Name="$LocalPlayer.GetDefaultURL("Name")
+							$"?Class="$LocalPlayer.GetDefaultURL("Class")
+							$"?Character="$LocalPlayer.GetDefaultURL("Character");
+	}
+
+
+	// Notify access control, to cleanup online subsystem references
+	if (AccessControl != none)
+	{
+		AccessControl.NotifyServerTravel(bSeamless);
+	}
+
+	// Trigger cleanup of online delegates
+	ClearOnlineDelegates();
+
+	if (bSeamless)
+	{
+		WorldInfo.SeamlessTravel(WorldInfo.NextURL, bAbsolute);
+		WorldInfo.NextURL = "";
+	}
+	// Switch immediately if not networking.
+	else if (WorldInfo.NetMode != NM_DedicatedServer && WorldInfo.NetMode != NM_ListenServer)
+	{
+		WorldInfo.NextSwitchCountdown = 0.0;
+	}
+	
+	// on dedicated servers, add a delay to the travel process to give clients a little more time to construct any meshes
+	// since that process will get cut off when the server completely finishes travelling
+	if (WorldInfo.NetMode == NM_DedicatedServer && WorldInfo.IsInSeamlessTravel())
+	{
+		WorldInfo.SetSeamlessTravelMidpointPause(true);
+		SetTimer(7.0, false, 'ContinueSeamlessTravel');
+	}
+}
+function NotifyEndGame()
+{
+	local `{GAMEMODE}PlayerController PC;
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC)
+	{
+		PC.ClientDisplayConsoleMessage("NotifyEndGame");
+	}
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC)
+		PC.EndGame(WinningTeam, WinningIndividual);
+}
+
+function EndGame(PlayerReplicationInfo Winner, string Reason )
+{
+	local `{GAMEMODE}PlayerController PC;
+	local int WinningTeamSize;
+	WinningTeam = GetWinningTeam();
+	WinningIndividual = AOCPRI(Winner);
+
+	if (IsTimerActive('NotifyEndGame') || IsTimerActive('ActualEndGame'))
+		return;
+
+	bAOCGameEnded = true;
+	bGameEnded = true;
+	if(WinningTeam != EFAC_None)
+	{
+		TeamWinner = ConvertEAOCFactionToString(WinningTeam);
+	}
+
+	
+	
+	
+	
+	
+	WinningTeamSize = 0;
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC)
+	{
+		if (PC.CurrentFamilyInfo.FamilyFaction == WinningTeam)
+		{
+			++WinningTeamSize;
+		}
+	}
+	
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC)
+	{
+		PC.PreEndGame(WinningTeam, WinningIndividual, GetCurrentMap(), WinningTeamSize);
+	}
+
+	RCon.GameEvent_RoundOver(WinningTeam);
+
+	SetTimer(5.0f, false, 'NotifyEndGame'); // time to notify scoreboard
+	SetTimer(15.0f, false, 'ActualEndGame'); // time to transit loadingscreen
+}
+ 
+function ActualEndGame()
+{
+	local Sequence GameSequence;
+	local array<SequenceObject> Events;
+	local int i;
+	PerformEndGameHandling();
+	// trigger any Kismet "Game Ended" events
+	GameSequence = WorldInfo.GetGameSequence();
+	if (GameSequence != None)
+	{
+		GameSequence.FindSeqObjectsByClass(class'UTSeqEvent_GameEnded', true, Events);
+		for (i = 0; i < Events.length; i++)
+		{
+			UTSeqEvent_GameEnded(Events[i]).CheckActivate(self, None);
+		}
+	}
+	GotoState('MatchOver');
+}
+
+event InitGame( string Options, out string ErrorMessage )
+{
+	if(HasOption(Options, "LargePlayerCap") || HasOption(Options, "LargePlayerCap2"))
+	{
+		MaxPlayersAllowed = 100;
+	}
+
+	super(UTTeamGame).InitGame(Options, ErrorMessage);
+
+	if(HasOption(Options, "LargePlayerCap2"))
+	{
+		//Here: massively increase bandwidth use. The tradeoff is lower CPU use and the network won't saturate
+		class'Engine'.static.GetEngine().bAllPawnsAlwaysRelevant = true;
+		if(!HasOption(Options, "DontForceClientRate"))
+		{
+			class'Engine'.static.GetEngine().ForcedMinClientRate = 300000;
+		}
+	}
+	if(HasOption(Options, "RelevancyAutoAdjust"))
+	{
+		class'Engine'.static.GetEngine().bAllowRelevancyAutoAdjust = true;
+	}
+	if(HasOption(Options, "AllPawnsAlwaysRelevant"))
+	{
+		class'Engine'.static.GetEngine().bAllPawnsAlwaysRelevant = true;
+	}
+
+	CustomizationClass = Class(DynamicLoadObject("AOCCustomizationContent.AOCCustomizationContent",class'Class'));
+	bSoakTesting = HasOption(Options, "SoakTesting");
+	NumBotsToSpawn = Clamp(GetIntOption( Options, "NumPlay", 0 ), 0, 32);
+	NumDummyBotsToSpawn = Clamp(GetIntOption( Options, "NumDummies", 0 ), 0, 64);
+	InitialNumBotsToSpawn = NumBotsToSpawn;
+	InitialNumDummyBotsToSpawn = NumDummyBotsToSpawn;
+	bLogGameplayEvents = bLogGameplayEvents || HasOption(Options, "LogGameplayEvents");
+
+	fAutoBalanceInterval = FMax(fAutoBalanceInterval, 11.f);
+	InitRemoteConsole(Options);
+
+	if ( WorldInfo.NetMode == NM_DedicatedServer || WorldInfo.NetMode == NM_ListenServer )
+	{
+		UpdateMapList();
+
+		UniqueSessionUID = CreateGuid();
+	}
+
+	bTournamentMode = bTournamentMode || HasOption(Options, "Tournament") || HasOption(Options, "TournamentMode");
+	if(TournamentTeamReadyThreshold <= 0)
+	{
+		TournamentTeamReadyThreshold = 1.0f;
+		AOCGRI(GameReplicationInfo).fTournamentReadyThreshold = TournamentTeamReadyThreshold;
+	}
+
+	if(bTournamentMode)
+	{
+		bAutoBalance = false;
+		bDeathBasedAutoBalance = false;
+		AOCGRI(GameReplicationInfo).bBalanceTeams = false;
+		bUseMaxPingLimit = false;
+		bDisableTeamDamagePenalty = true;
+		bAdminCanPause = true;
+		bAnyUserCanGetSteamID = true;
+	}
+
+	OnlineSubsystemSteamworks(OnlineSub).AuthInterface.AddClientAuthCompleteDelegate(OnClientAuthComplete);
+}
+
+function InitRemoteConsole(string Options)
+{
+	local S3RCon tempRCon;
+	// Initialize Remote Console
+	if (WorldInfo.NetMode == NM_DedicatedServer)
+	{
+		// Find previous remote console before level change
+		foreach WorldInfo.AllActors(class'S3RCon', tempRCon)
+		{
+			RCon = tempRCon;
+			break;
+		}
+
+		// Not found, spawn remote console
+		if (RCon == none)
+		{
+			RCon = Spawn(class'S3RCon');
+		}
+	}
+}
+function RConChangeTeam(`{GAMEMODE}PlayerController Target)
+{
+	local int Offset, i;
+	
+	if(Target == none)
+	{
+		return;
+	}
+	
+	if(Target.CurrentFamilyInfo.class == class'AOCFamilyInfo_Agatha_King' || Target.CurrentFamilyInfo.class == class'AOCFamilyInfo_Mason_King')
+	{
+		return;
+	}
+	
+	if(Target.CurrentFamilyInfo.FamilyFaction == EFAC_Agatha)
+	{
+		Offset = 5;
+	}
+	else
+	{
+		Offset = -5;
+	}
+	
+	for(i = 0; i < ArrayCount(AOCGRI(GameReplicationInfo).FamilyInfos) && AOCGRI(GameReplicationInfo).FamilyInfos[i] != Target.CurrentFamilyInfo; ++i);
+	i += Offset;
+	
+	Target.SetNewClass(AOCGRI(GameReplicationInfo).FamilyInfos[i]);
+}
+
+function getPlayerList() {
+	local `{GAMEMODE}PlayerController PC;
+	local int i;
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
+		PC.ClientDisplayConsoleMessage("getPlayerList START :::::::: ");
+	}
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
+		if(PC.CurrentFamilyInfo.class != class'AOCFamilyInfo_Agatha_King' && PC.CurrentFamilyInfo.class != class'AOCFamilyInfo_Mason_King')
+		{
+			Total.AddItem(PC);
+		}
+		//AOCPRI(PC.PlayerReplicationInfo).MyRank
+	}
+	Total.Sort(PCcomp);
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
+		for(i=0;i<Total.Length;i++) {
+			PC.ClientDisplayConsoleMessage(AOCPRI(Total[i].PlayerReplicationInfo).MyRank);
+		}
+	}
+}
+function StartRound()
+{	
+	super.StartRound();
+	RankBasedAutobalance();
+}
+function sumTeamRank() {
+	local `{GAMEMODE}PlayerController PC;
+	sumAgatha = 0;
+	sumMason = 0;
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
+		if(AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() == EFAC_MASON)
+			sumMason = sumMason + AOCPRI(PC.PlayerReplicationInfo).MyRank * 2;
+		if(AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() == EFAC_AGATHA)
+			sumAgatha = sumAgatha + AOCPRI(PC.PlayerReplicationInfo).MyRank * 2;
+	}
+}
+function RankBasedAutobalance() {
+	local `{GAMEMODE}PlayerController PC;
+	local int sumA, sumB, idx, i;
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
+		PC.ClientDisplayConsoleMessage("RANKBASED START :::::::: ");
+	}
+	sumA = 0;
+	sumB = 0;
+	Total.Length = 0;
+	AgathaT.Length = 0;
+	MasonT.Length = 0;
+	
+	getPlayerList();
+	for(idx = 0; idx < Total.Length; idx++) {
+		if(AgathaT.Length - MasonT.Length > 2) {
+			sumB = sumB + AOCPRI(Total[idx].PlayerReplicationInfo).MyRank*2;
+			MasonT.AddItem(Total[idx]);
+		}
+		else if(MasonT.Length - AgathaT.Length > 2) {
+			sumA = sumA + AOCPRI(Total[idx].PlayerReplicationInfo).MyRank*2;
+			AgathaT.AddItem(Total[idx]);
+		}
+		else {
+			if(sumA > sumB) {
+				sumB = sumB + AOCPRI(Total[idx].PlayerReplicationInfo).MyRank*2;
+				MasonT.AddItem(Total[idx]);
+			}
+			else {
+				sumA = sumA + AOCPRI(Total[idx].PlayerReplicationInfo).MyRank*2;
+				AgathaT.AddItem(Total[idx]);
+			}
+		}
+	}
+	//inController.Response_JoinTeam(inTeam, true);
+	for(idx = 0; idx < AgathaT.Length; idx++) {
+		if(AOCPRI(AgathaT[idx].PlayerReplicationInfo).GetCurrentTeam() != EFAC_AGATHA)
+		{
+			//AOCPRI(AgathaT[idx].PlayerReplicationInfo).SetNextTeam(EFAC_AGATHA);
+			//for(i = 0; i < ArrayCount(AOCGRI(GameReplicationInfo).FamilyInfos) && AOCGRI(GameReplicationInfo).FamilyInfos[i] != AgathaT[idx].CurrentFamilyInfo; ++i);
+			//	i += -5;
+			//ChangeTeam(AgathaT[idx], 1, true);
+			if(AOCPRI(AgathaT[idx].PlayerReplicationInfo).GetCurrentClass() == ECLASS_Archer) {
+				i = 0;
+			}
+			else if(AOCPRI(AgathaT[idx].PlayerReplicationInfo).GetCurrentClass() == ECLASS_ManAtArms) {
+				i = 1;
+			}
+			else if(AOCPRI(AgathaT[idx].PlayerReplicationInfo).GetCurrentClass() == ECLASS_Vanguard) {
+				i = 2;
+			}
+			else if(AOCPRI(AgathaT[idx].PlayerReplicationInfo).GetCurrentClass() == ECLASS_Knight) {
+				i = 3;
+			}
+			AgathaT[idx].SetNewClass(AOCGRI(GameReplicationInfo).FamilyInfos[i]);
+		}
+	}
+	for(idx = 0; idx < MasonT.Length; idx++) {
+		if(AOCPRI(MasonT[idx].PlayerReplicationInfo).GetCurrentTeam() != EFAC_MASON)
+		{
+			//AOCPRI(MasonT[idx].PlayerReplicationInfo).SetNextTeam(EFAC_MASON);
+			//for(i = 0; i < ArrayCount(AOCGRI(GameReplicationInfo).FamilyInfos) && AOCGRI(GameReplicationInfo).FamilyInfos[i] != AgathaT[idx].CurrentFamilyInfo; ++i);
+			//	i += 5;
+			//ChangeTeam(MasonT[idx], 2, true);
+			if(AOCPRI(MasonT[idx].PlayerReplicationInfo).GetCurrentClass() == ECLASS_Archer) {
+				i = 5;
+			}
+			else if(AOCPRI(MasonT[idx].PlayerReplicationInfo).GetCurrentClass() == ECLASS_ManAtArms) {
+				i = 6;
+			}
+			else if(AOCPRI(MasonT[idx].PlayerReplicationInfo).GetCurrentClass() == ECLASS_Vanguard) {
+				i = 7;
+			}
+			else if(AOCPRI(MasonT[idx].PlayerReplicationInfo).GetCurrentClass() == ECLASS_Knight) {
+				i = 8;
+			}
+			MasonT[idx].SetNewClass(AOCGRI(GameReplicationInfo).FamilyInfos[i]);
+		}
+	}
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
+		PC.ClientDisplayConsoleMessage("AGATHA LIST :::::::: ");
+		for(idx=0;idx<AgathaT.Length;idx++) {
+			PC.ClientDisplayConsoleMessage(AOCPRI(AgathaT[idx].PlayerReplicationInfo).MyRank);
+		}
+		
+		PC.ClientDisplayConsoleMessage("MASON LIST :::::::: ");
+		for(idx=0;idx<MasonT.Length;idx++) {
+			PC.ClientDisplayConsoleMessage(AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank);
+		}
+	}
+}
+
+function int PCcomp(`{GAMEMODE}PlayerController A, `{GAMEMODE}PlayerController B)
+{
+	return AOCPRI(B.PlayerReplicationInfo).MyRank - AOCPRI(A.PlayerReplicationInfo).MyRank;
+} 
+/*
+function bool RequestJoinTeam(AOCPlayerController inController, EAOCFaction inTeam, optional bool bForce = false)
+{
+	local bool bAllow;
+	local EAOCFaction CurrentTeam;
+
+	bAllow = true; // Default for non-autobalance games is to always let player change go through
+	// Only do this if we're using sort of autobalance
+	if (bAutoBalance || bDeathBasedAutoBalance)
+	{
+		CurrentTeam = AOCPRI(inController.PlayerReplicationInfo).GetCurrentTeam();
+
+		// Select Random Team
+		if (inTeam == EFAC_ALL)
+		{
+			inTeam = EAOCFaction(Rand(2));
+			if (inTeam == EFAC_AGATHA)
+			{
+				if (!(PotentialAgathaSize <= PotentialMasonSize || PotentialAgathaSize == 0))
+				{
+					inTeam = EFAC_MASON;
+				}
+				if (CurrentTeam == EFAC_MASON && PotentialMasonSize == PotentialAgathaSize && PotentialAgathaSize > 0)
+				{
+					inTeam = EFAC_MASON;
+				}
+			}
+			else
+			{
+				if (!(PotentialMasonSize <= PotentialAgathaSize || PotentialMasonSize == 0))
+				{
+					inTeam = EFAC_AGATHA;
+				}
+				if (CurrentTeam == EFAC_AGATHA && PotentialMasonSize == PotentialAgathaSize && PotentialMasonSize > 0)
+				{
+					inTeam = EFAC_AGATHA;
+				}
+			}		
+		}
+
+		bAllow = false; // Autobalanced games default is no.
+		// Reject if we're going to pass any limits here
+		if (inTeam == EFAC_AGATHA && CurrentTeam != inTeam)
+		{
+			bAllow = PotentialAgathaSize <= PotentialMasonSize || bForce || PotentialAgathaSize == 0;
+
+			if (CurrentTeam == EFAC_MASON && PotentialMasonSize == PotentialAgathaSize && PotentialAgathaSize > 0)
+			{
+				bAllow = false;
+			}
+
+			if (bAllow)
+			{
+				// Set appropriate temp class
+				AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(EFAC_AGATHA);
+			}
+
+			if (!bForce)
+				inController.Response_JoinTeam(inTeam, bAllow);
+		}
+		else if (inTeam == EFAC_MASON && CurrentTeam != inTeam)
+		{
+			bAllow = PotentialMasonSize <= PotentialAgathaSize || bForce || PotentialMasonSize == 0;
+			
+			if (CurrentTeam == EFAC_AGATHA && PotentialMasonSize == PotentialAgathaSize && PotentialMasonSize > 0)
+			{
+				bAllow = false;
+			}
+
+			if (bAllow)
+			{
+				// Set appropriate temp class
+				AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(EFAC_MASON);
+			}
+
+			if (!bForce)
+				inController.Response_JoinTeam(inTeam, bAllow);
+		}
+		else if (inTeam != EFAC_NONE && inTeam == CurrentTeam) // User is always allowed to join team again.
+		{
+			AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(inTeam);
+
+			if (!bForce)
+				inController.Response_JoinTeam(inTeam, true);
+		}
+		else // Auto-reject
+		{
+			if (!bForce)
+				inController.Response_JoinTeam(inTeam, false);
+		}
+	}
+	else
+	{
+		// Select Random Team
+		if (inTeam == EFAC_ALL)
+		{
+			inTeam = EAOCFaction(Rand(2));
+
+			if (inTeam == EFAC_AGATHA)
+			{
+				if (!(PotentialAgathaSize <= PotentialMasonSize || PotentialAgathaSize == 0))
+				{
+					inTeam = EFAC_MASON;
+				}
+			}
+			else
+			{
+				if (!(PotentialMasonSize <= PotentialAgathaSize || PotentialMasonSize == 0))
+				{
+					inTeam = EFAC_AGATHA;
+				}
+			}
+		}
+
+		if (!bForce)
+			inController.Response_JoinTeam(inTeam, true);
+
+		AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(inTeam);
+	}
+	return bAllow;
+}
+
+
+function AddMeToAutobalance(AOCPRI PRI) // 넌 임마 구조조정 대상자야!
+{
+	if (AutoBalanceStack.Find(PRI) == INDEX_NONE)
+	{
+		AutoBalanceStack.InsertItem(0, PRI);
+	}
+}
+
+function bool CanIBeAutoBalanced(AOCPlayerController inPC) // 내가 구조조정 대상자라고?
+{
+	local int IndexOfAutoBalance, i;
+
+	IndexOfAutoBalance = AutoBalanceStack.Length / 5;
+
+	for(i=0; i <= IndexOfAutoBalance; i++)
+	{
+		if(AutoBalanceStack[i] == AOCPRI(inPC.PlayerReplicationInfo))
+			return true;
+	}
+
+	return false;
+}
+
+function PerformDeathBasedAB(AOCPlayerController inPC) // 죽었을때 팀을 바꾼다
+{
+	local AOCFamilyInfo NewFamily;
+	local bool BalanceAgatha;
+	if ((!bDeathBasedAutoBalance && !bAutoBalance) || inPC == none)
+		return;
+
+	// Don't perform auto-balance in the last 2 minutes of the game
+	if (TimeLeft <= 120)
+		return;
+
+	if (!CanIBeAutoBalanced(inPC))
+		return;
+
+	// Check if auto-balance is needed
+	if (Abs(AOCGRI(GameReplicationInfo).AgathaSize - AOCGRI(GameReplicationInfo).MasonSize) >= 2)
+	{
+		if (AOCGRI(GameReplicationInfo).AgathaSize > AOCGRI(GameReplicationInfo).MasonSize) // 아가사 -> 메이슨 해야함
+			BalanceAgatha = true;
+
+		if (BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_AGATHA) // 죽은놈이 아가사네?
+		{
+			NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[inPC.CurrentFamilyInfo.default.ClassReference + 5];
+			
+			inPC.ClientAutoBalance(NewFamily);
+
+			LocalizedPrivateMessage(inPC, 27);
+			inPC.SetNewClass(NewFamily, false, false);
+			AOCPRI(inPC.PlayerReplicationInfo).MyFamilyInfo = none;
+		}
+		else if (!BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_MASON) // 메이슨 -> 아가산데 죽은놈이 메이슨이네?
+		{
+			NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[inPC.CurrentFamilyInfo.default.ClassReference];
+			
+			inPC.ClientAutoBalance(NewFamily);
+
+			LocalizedPrivateMessage(inPC, 27);
+			inPC.SetNewClass(NewFamily, false, false);
+			AOCPRI(inPC.PlayerReplicationInfo).MyFamilyInfo = none;
+		}
+
+		AutoBalanceStack.RemoveItem(AOCPRI(inPC.PlayerReplicationInfo));
+		AutoBalanceStack.AddItem(AOCPRI(inPC.PlayerReplicationInfo));
+	}
+}
+*/
+DefaultProperties
+{
+	ModDisplayString="Chiv Enhanced 0.4"
+	HUDType=class'`{GAMEMODE}HUD'
+	SpawnWaveInterval=1
+	MinimumRespawnTime=0
+	
+	PlayerControllerClass = class'`{GAMEMODE}PlayerController'
+	DefaultPawnClass = class'`{GAMEMODE}Pawn'
+}
