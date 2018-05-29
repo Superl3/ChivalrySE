@@ -38,8 +38,6 @@ function Killed( Controller Killer, Controller KilledPlayer, Pawn KilledPawn, cl
 
 	if (bGameEnded)
 		return;
-
-	`log("KILLLED"@Killer@KilledPlayer@KilledPawn);
 	
 	// Give kill to Killer
 	self.LastKilledPawn = KilledPawn;
@@ -59,8 +57,6 @@ function Killed( Controller Killer, Controller KilledPlayer, Pawn KilledPawn, cl
 		RB_changeTeam(`{GAMEMODE}PlayerController(KilledPlayer));
 	NotifyKilled(Killer, KilledPlayer, KilledPawn, damageType);
 	
-	`RecordKillEvent(NORMAL, Killer, DamageType, KilledPlayer);
-	`RecordDeathEvent(NORMAL, Killer, DamageType, KilledPlayer);
 }
 
 function PerformOnFirstSpawn(Controller NewPlayer)
@@ -532,6 +528,8 @@ function Logout( Controller Exiting )
 	`{GAMEMODE}PlayerController(Exiting).DestroyHUD();
 	RemoveFromQueue(Exiting);
 
+	DeathBasedRankAB();
+
 	// Tell the online subsystem the number of players in the game
 	UpdateGameSettingsCounts();
 }
@@ -734,7 +732,7 @@ event InitGame( string Options, out string ErrorMessage )
 		class'Engine'.static.GetEngine().bAllPawnsAlwaysRelevant = true;
 	}
 
-	RankBalanceStack.Length = 0
+	RankBalanceStack.Length = 0;
 	CustomizationClass = Class(DynamicLoadObject("AOCCustomizationContent.AOCCustomizationContent",class'Class'));
 	bSoakTesting = HasOption(Options, "SoakTesting");
 	NumBotsToSpawn = Clamp(GetIntOption( Options, "NumPlay", 0 ), 0, 32);
@@ -863,7 +861,7 @@ function sumTeamRank() {
 }
 function DeathBasedRankAB() {
 	local `{GAMEMODE}PlayerController PC;
-	local int sum, idx, i, rnk, rnkB, diff, keyAgatha, keyMason;
+	local int sum, idx, i, rnk, rnkB, diff, keyAgatha, keyMason,lenA,lenB;
 
 	sum = 0;
 	keyAgatha = -1;
@@ -876,9 +874,9 @@ function DeathBasedRankAB() {
 	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
 		if(CanIBeRBAB(PC))
 			continue;
-		if(AOCPRI(PC).GetCurrentTeam() == EFAC_AGATHA)
+		if(AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() == EFAC_AGATHA)
 			AgathaT.Additem(PC);
-		else if(AOCPRI(PC).GetCurrentTeam() == EFAC_MASON)
+		else if(AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() == EFAC_MASON)
 			MasonT.Additem(PC);
 	}
 
@@ -895,7 +893,7 @@ function DeathBasedRankAB() {
 			continue;
 		rnk = AOCPRI(AgathaT[idx].PlayerReplicationInfo).MyRank;
 		for(i = 0; i<MasonT.Length;i++) {		
-			if(MasonT[i].CurrentFamilyInfo.class == class'AOCFamilyInfo_Mason_King'))
+			if(MasonT[i].CurrentFamilyInfo.class == class'AOCFamilyInfo_Mason_King')
 				continue;
 			rnkB = AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank;
 			if(diff > abs(sum - rnk*rnk*2 + rnkB*rnkB*2)) {
@@ -919,7 +917,7 @@ function DeathBasedRankAB() {
 			}
 		} else {
 			for(i = 0; i<MasonT.Length;i++) {		
-				if(MasonT[i].CurrentFamilyInfo.class == class'AOCFamilyInfo_Mason_King'))
+				if(MasonT[i].CurrentFamilyInfo.class == class'AOCFamilyInfo_Mason_King')
 					continue;
 				rnk = AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank;
 				if(diff > abs(sum - rnk*rnk*2)) {
@@ -930,22 +928,23 @@ function DeathBasedRankAB() {
 			}
 		}
 	} 
-
+	lenA = AgathaT.Length;
+	lenB = MasonT.Length;
 	if(keyAgatha != -1) {
 		RankBalanceStack.RemoveItem(AgathaT[keyAgatha]);
 		RankBalanceStack.AddItem(AgathaT[keyAgatha]);
 		//RB_changeTeam(true,AgathaT[keyAgatha]);
-		AgathaT.Length -= 1;
-		MasonT.Length += 1;
+		lenA -= 1;
+		lenB += 1;
 	}
 	if(keyMason != -1) {
 		RankBalanceStack.RemoveItem(MasonT[keyMason]);
 		RankBalanceStack.AddItem(MasonT[keyMason]);
 		//RB_changeTeam(false,MasonT[keyMason]);
-		MasonT.Length -= 1;
-		AgathaT.Length += 1;
+		lenB -= 1;
+		lenA += 1;
 	}
-	if(abs(AgathaT.Length - MasonT.Length) >= 1) { // ì•„ì§ê¹Œì§€ ë°¸ëŸ°ìŠ¤ ë¬¸ì œ ìˆì„ì‹œ
+	if(abs(lenA - lenB) >= 1) { // ¾ÆÁ÷±îÁö ¹ë·±½º ¹®Á¦ ÀÖÀ»½Ã
 		DeathBasedRankAB();
 	}
 }
@@ -954,7 +953,7 @@ function RB_changeTeam( `{GAMEMODE}PlayerController PC) {
 	
 	RankBalanceStack.RemoveItem(PC);
 
-	if(AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() == 'EFAC_AGATHA')
+	if(AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() == EFAC_AGATHA)
 		NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[PC.CurrentFamilyInfo.default.ClassReference + 5];
 	else 
 		NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[PC.CurrentFamilyInfo.default.ClassReference];
@@ -982,7 +981,7 @@ function RankBasedAutobalance() {
 	getPlayerList();
 	for(idx = 0; idx < Total.Length; idx++) {
 		rnk = AOCPRI(Total[idx].PlayerReplicationInfo).MyRank;
-		if(AgathaT.Length - MasonT.Length > 2) { // ê°’ì„ *2ë¡œ ê³„ì‚°
+		if(AgathaT.Length - MasonT.Length > 2) { // °ªÀ» *2·Î °è»ê
 			sumB += rnk * rnk;
 			MasonT.AddItem(Total[idx]);
 		}
@@ -1148,15 +1147,15 @@ function bool RequestJoinTeam(AOCPlayerController inController, EAOCFaction inTe
 }
 
 
-function AddMeToAutobalance(AOCPRI PRI) // ë„Œ ì„ë§ˆ êµ¬ì¡°ì¡°ì • ëŒ€ìƒìì•¼!
+function AddMeToAutobalance(AOCPRI PRI) // ³Í ÀÓ¸¶ ±¸Á¶Á¶Á¤ ´ë»óÀÚ¾ß!
 {
-	if (AutoBalanceStack.Find(PRI) == INDEX_NONE) // ì˜¤í† ë°¸ëŸ°ìŠ¤ ëª©ë¡ì— ì•„ì§ ì¡´ì¬ xë¼ë©´ ì¶”ê°€
+	if (AutoBalanceStack.Find(PRI) == INDEX_NONE) // ¿ÀÅä¹ë·±½º ¸ñ·Ï¿¡ ¾ÆÁ÷ Á¸Àç x¶ó¸é Ãß°¡
 	{
 		AutoBalanceStack.InsertItem(0, PRI);
 	}
 }
 
-function bool CanIBeAutoBalanced(AOCPlayerController inPC) // ë‚´ê°€ êµ¬ì¡°ì¡°ì • ëŒ€ìƒìë¼ê³ ?
+function bool CanIBeAutoBalanced(AOCPlayerController inPC) // ³»°¡ ±¸Á¶Á¶Á¤ ´ë»óÀÚ¶ó°í?
 {
 	local int IndexOfAutoBalance, i;
 
@@ -1170,8 +1169,8 @@ function bool CanIBeAutoBalanced(AOCPlayerController inPC) // ë‚´ê°€ êµ¬ì¡°ì¡°ì 
 
 	return false;
 }
-
-function bool CanIBeRBAB(`{GAMEMODE}PlayerController inPC) // ë‚´ê°€ êµ¬ì¡°ì¡°ì • ëŒ€ìƒìë¼ê³ ?
+*/
+function bool CanIBeRBAB(`{GAMEMODE}PlayerController inPC) // ³»°¡ ±¸Á¶Á¶Á¤ ´ë»óÀÚ¶ó°í?
 {
 	local int IndexOfAutoBalance, i;
 
@@ -1179,14 +1178,14 @@ function bool CanIBeRBAB(`{GAMEMODE}PlayerController inPC) // ë‚´ê°€ êµ¬ì¡°ì¡°ì 
 
 	for(i=0; i <= IndexOfAutoBalance; i++)
 	{
-		if(RankBasedAutobalance[i] == inPC)
+		if(RankBalanceStack[i] == inPC)
 			return true;
 	}
 
 	return false;
 }
-
-function PerformDeathBasedAB(AOCPlayerController inPC) // ì£½ì—ˆì„ë•Œ íŒ€ì„ ë°”ê¾¼ë‹¤
+/*
+function PerformDeathBasedAB(AOCPlayerController inPC) // Á×¾úÀ»¶§ ÆÀÀ» ¹Ù²Û´Ù
 {
 	local AOCFamilyInfo NewFamily;
 	local bool BalanceAgatha;
@@ -1196,39 +1195,39 @@ function PerformDeathBasedAB(AOCPlayerController inPC) // ì£½ì—ˆì„ë•Œ íŒ€ì„ ë°
 	// Don't perform auto-balance in the last 2 minutes of the game
 	if (TimeLeft <= 120)
 		return;
-// ì˜¤í† ë°¸ëŸ°ìŠ¤ ìŠ¤íƒ ë‚´ì— í•´ë‹¹ PCê°€ ë“¤ì–´ìˆì„ ê²½ìš° : ê²Œì„ ì‹œì‘ì‹œì— ëª¨ë“  í”Œë ˆì´ì–´ë¥¼ ìŠ¤íƒ ë‚´ì— ë„£ëŠ”ë‹¤
+// ¿ÀÅä¹ë·±½º ½ºÅÃ ³»¿¡ ÇØ´ç PC°¡ µé¾îÀÖÀ» °æ¿ì : °ÔÀÓ ½ÃÀÛ½Ã¿¡ ¸ğµç ÇÃ·¹ÀÌ¾î¸¦ ½ºÅÃ ³»¿¡ ³Ö´Â´Ù
 	if (!CanIBeAutoBalanced(inPC))
 		return;
 
-	// Check if auto-balance is needed ì˜¤í† ë°¸ëŸ°ìŠ¤ í•„ìš”í•œì§€ í™•ì¸í•˜ê¸°
+	// Check if auto-balance is needed ¿ÀÅä¹ë·±½º ÇÊ¿äÇÑÁö È®ÀÎÇÏ±â
 	if (Abs(AOCGRI(GameReplicationInfo).AgathaSize - AOCGRI(GameReplicationInfo).MasonSize) >= 2)
 	{
-		if (AOCGRI(GameReplicationInfo).AgathaSize > AOCGRI(GameReplicationInfo).MasonSize) // ì•„ê°€ì‚¬ -> ë©”ì´ìŠ¨ í•´ì•¼í•¨
+		if (AOCGRI(GameReplicationInfo).AgathaSize > AOCGRI(GameReplicationInfo).MasonSize) // ¾Æ°¡»ç -> ¸ŞÀÌ½¼ ÇØ¾ßÇÔ
 			BalanceAgatha = true;
 
-		if (BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_AGATHA) // ì•„ê°€ì‚¬ -> ë©”ì´ìŠ¨
+		if (BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_AGATHA) // ¾Æ°¡»ç -> ¸ŞÀÌ½¼
 		{
 			NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[inPC.CurrentFamilyInfo.default.ClassReference + 5];
-			// ì•„ê°€ì‚¬ + 5 -> ë©”ì´ìŠ¨
+			// ¾Æ°¡»ç + 5 -> ¸ŞÀÌ½¼
 			inPC.ClientAutoBalance(NewFamily);
-			// ë­”ì§€ ì°¾ì•„ë³´ê¸°
+			// ¹ºÁö Ã£¾Æº¸±â
 			LocalizedPrivateMessage(inPC, 27);
-			// You will be autobalanced ë©”ì‹œì§€ ì¶œë ¥
+			// You will be autobalanced ¸Ş½ÃÁö Ãâ·Â
 			inPC.SetNewClass(NewFamily, false, false);
-			// ê°’ ì„¤ì •í•œëŒ€ë¡œ í´ë˜ìŠ¤ ë°”ê¿”ì£¼ê¸°
+			// °ª ¼³Á¤ÇÑ´ë·Î Å¬·¡½º ¹Ù²ãÁÖ±â
 			AOCPRI(inPC.PlayerReplicationInfo).MyFamilyInfo = none;
 		}
-		else if (!BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_MASON) // ë©”ì´ìŠ¨ -> ì•„ê°€ì‚¬
+		else if (!BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_MASON) // ¸ŞÀÌ½¼ -> ¾Æ°¡»ç
 		{
 			NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[inPC.CurrentFamilyInfo.default.ClassReference];
-			// ì´ë ‡ê²Œ í•˜ë©´ ë©”ì´ìŠ¨ -> ì•„ê°€ì‚¬ì¸ë“¯
+			// ÀÌ·¸°Ô ÇÏ¸é ¸ŞÀÌ½¼ -> ¾Æ°¡»çÀÎµí
 			inPC.ClientAutoBalance(NewFamily);
 
 			LocalizedPrivateMessage(inPC, 27);
 			inPC.SetNewClass(NewFamily, false, false);
 			AOCPRI(inPC.PlayerReplicationInfo).MyFamilyInfo = none;
 		}
-		// í•´ë‹¹ ìœ ì €ê°€ ì˜¤í† ë°¸ëŸ°ìŠ¤ ë˜ì—ˆìœ¼ë¯€ë¡œ ìŠ¤íƒ ë‚´ ìœ„ì¹˜ë¥¼ ìµœ í›„ë°©ìœ¼ë¡œ ì›€ì§ì¸ë‹¤.
+		// ÇØ´ç À¯Àú°¡ ¿ÀÅä¹ë·±½º µÇ¾úÀ¸¹Ç·Î ½ºÅÃ ³» À§Ä¡¸¦ ÃÖ ÈÄ¹æÀ¸·Î ¿òÁ÷ÀÎ´Ù.
 		AutoBalanceStack.RemoveItem(AOCPRI(inPC.PlayerReplicationInfo));
 		AutoBalanceStack.AddItem(AOCPRI(inPC.PlayerReplicationInfo));
 	}
