@@ -28,6 +28,37 @@ static event class<GameInfo> SetGameType(string MapName, string Options, string 
 	return super(UTTeamGame).SetGameType(MapName, Options, Portal);
 }
 
+
+function Killed( Controller Killer, Controller KilledPlayer, Pawn KilledPawn, class<DamageType> damageType )
+{
+	local AOCPRI KilledPRI;
+
+	if (bGameEnded)
+		return;
+
+	`log("KILLLED"@Killer@KilledPlayer@KilledPawn);
+	
+	// Give kill to Killer
+	self.LastKilledPawn = KilledPawn;
+	ScoreKill(Killer, KilledPlayer);
+	self.LastKilledPawn = none;
+
+	KilledPRI = AOCPRI(KilledPlayer.PlayerReplicationInfo);
+	// Give Death to Dead Player
+	if (KilledPRI != none)
+	{
+		KilledPRI.IncrementDeaths();
+	}
+
+	// Check to see if we want to autobalance dead player
+	PerformDeathBasedAB(AOCPlayerController(KilledPlayer));
+
+	NotifyKilled(Killer, KilledPlayer, KilledPawn, damageType);
+	
+	`RecordKillEvent(NORMAL, Killer, DamageType, KilledPlayer);
+	`RecordDeathEvent(NORMAL, Killer, DamageType, KilledPlayer);
+}
+
 function PerformOnFirstSpawn(Controller NewPlayer)
 {
 /*
@@ -499,11 +530,6 @@ function Logout( Controller Exiting )
 
 	// Tell the online subsystem the number of players in the game
 	UpdateGameSettingsCounts();
-	sumTeamRank();
-	i = sumAgatha - sumMason;
-	if(i<0) i*=-1;
-	if(i > 20)
-		RankBasedAutobalance();
 }
 
 
@@ -819,18 +845,110 @@ function StartRound()
 }
 function sumTeamRank() {
 	local `{GAMEMODE}PlayerController PC;
+	local int rnk;
 	sumAgatha = 0;
 	sumMason = 0;
 	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
+		rnk = AOCPRI(PC.PlayerReplicationInfo).MyRank;
 		if(AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() == EFAC_MASON)
-			sumMason = sumMason + AOCPRI(PC.PlayerReplicationInfo).MyRank * 2;
+			sumMason = sumMason + rnk * rnk;
 		if(AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() == EFAC_AGATHA)
-			sumAgatha = sumAgatha + AOCPRI(PC.PlayerReplicationInfo).MyRank * 2;
+			sumAgatha = sumAgatha + rnk * rnk;
 	}
+}
+function DeathBasedRankAB() {
+	local `{GAMEMODE}PlayerController PC;
+	local int sum, idx, i, rnk, rnkB, diff, keyAgatha, keyMason;
+
+	sum = 0;
+	keyAgatha = -1;
+	keyMason = -1;
+	Total.Length = 0;
+	AgathaT.Length = 0;
+	MasonT.Length = 0;
+	diff = 100000;
+
+	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
+		if(AOCPRI(PC).GetCurrentTeam() == EFAC_AGATHA)
+			AgathaT.Additem(PC);
+		else if(AOCPRI(PC).GetCurrentTeam() == EFAC_MASON)
+			MasonT.Additem(PC);
+	}
+
+	for(idx = 0; idx < AgathaT.Length; idx++) {
+		rnk = AOCPRI(AgathaT[idx].PlayerReplicationInfo).MyRank;
+		sum += rnk * rnk;
+	}
+	for(idx = 0; idx < MasonT.Length; idx++) {
+		rnk = AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank;
+		sum -= rnk * rnk;
+	}
+	for(idx = 0; idx< AgathaT.Length;idx++) {
+		rnk = AOCPRI(AgathaT[idx].PlayerReplicationInfo).MyRank;
+		for(i = 0; i<MasonT.Length;i++) {		
+			rnkB = AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank;
+			if(diff > abs(sum - rnk*rnk*2 + rnkB*rnkB*2)) {
+				diff = abs(sum - rnk*rnk*2 + rnkB*rnkB*2);
+				keyAgatha = idx;
+				keyMason = i;
+			}
+		}
+	}
+	if(abs(AgathaT.Length - MasonT.Length) >= 1) {// trade or give
+		if(AgathaT.Length > MasonT.Length) { 
+			for(i = 0; i<AgathaT.Length;i++) {		
+				rnk = AOCPRI(AgathaT[i].PlayerReplicationInfo).MyRank;
+				if(diff > abs(sum - rnk*rnk*2)) {
+					diff = abs(sum - rnk*rnk*2);
+					keyAgatha = i;
+					keyMason = -1;
+				}
+			}
+		} else {
+			for(i = 0; i<MasonT.Length;i++) {		
+				rnk = AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank;
+				if(diff > abs(sum - rnk*rnk*2)) {
+					diff = abs(sum - rnk*rnk*2);
+					keyAgatha = -1;
+					keyMason = i;
+				}
+			}
+		}
+	} 
+
+	if(keyAgatha != -1) {
+		RB_changeTeam(true,AgathaT[keyAgatha]);
+		AgathaT.Length -= 1;
+		MasonT.Length += 1;
+	}
+	if(keyMason != -1) {
+		RB_changeTeam(false,MasonT[keyMason]);
+		MasonT.Length -= 1;
+		AgathaT.Length += 1;
+	}
+	if(abs(AgathaT.Length - MasonT.Length) >= 1) { // 아직까지 밸런스 문제 있을시
+		DeathBasedRankAB();
+	}
+}
+function RB_changeTeam(bool isAgatha, `{GAMEMODE}PlayerController PC) {
+	local AOCFamilyInfo NewFamily;
+
+	if(isAgatha)
+		NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[PC.CurrentFamilyInfo.default.ClassReference + 5];
+	else 
+		NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[PC.CurrentFamilyInfo.default.ClassReference + 5];
+	
+	PC.ClientAutoBalance(NewFamily);
+	LocalizedPrivateMessage(PC, 27);
+	PC.SetNewClass(NewFamily, false, false);
+	AOCPRI(PC.PlayerReplicationInfo).MyFamilyInfo = none;	
+
+	AutoBalanceStack.RemoveItem(AOCPRI(PC.PlayerReplicationInfo));
+	AutoBalanceStack.AddItem(AOCPRI(PC.PlayerReplicationInfo));
 }
 function RankBasedAutobalance() {
 	local `{GAMEMODE}PlayerController PC;
-	local int sumA, sumB, idx, i;
+	local int sumA, sumB, idx, i, rnk;
 	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
 		PC.ClientDisplayConsoleMessage("RANKBASED START :::::::: ");
 	}
@@ -842,21 +960,22 @@ function RankBasedAutobalance() {
 	
 	getPlayerList();
 	for(idx = 0; idx < Total.Length; idx++) {
-		if(AgathaT.Length - MasonT.Length > 2) {
-			sumB = sumB + AOCPRI(Total[idx].PlayerReplicationInfo).MyRank*2;
+		rnk = AOCPRI(Total[idx].PlayerReplicationInfo).MyRank;
+		if(AgathaT.Length - MasonT.Length > 2) { // 값을 *2로 계산
+			sumB += rnk * rnk;
 			MasonT.AddItem(Total[idx]);
 		}
 		else if(MasonT.Length - AgathaT.Length > 2) {
-			sumA = sumA + AOCPRI(Total[idx].PlayerReplicationInfo).MyRank*2;
+			sumA += rnk * rnk;
 			AgathaT.AddItem(Total[idx]);
 		}
 		else {
 			if(sumA > sumB) {
-				sumB = sumB + AOCPRI(Total[idx].PlayerReplicationInfo).MyRank*2;
+				sumB += rnk * rnk;
 				MasonT.AddItem(Total[idx]);
 			}
 			else {
-				sumA = sumA + AOCPRI(Total[idx].PlayerReplicationInfo).MyRank*2;
+				sumA += rnk * rnk;
 				AgathaT.AddItem(Total[idx]);
 			}
 		}
@@ -909,12 +1028,14 @@ function RankBasedAutobalance() {
 	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
 		PC.ClientDisplayConsoleMessage("AGATHA LIST :::::::: ");
 		for(idx=0;idx<AgathaT.Length;idx++) {
-			PC.ClientDisplayConsoleMessage(AOCPRI(AgathaT[idx].PlayerReplicationInfo).MyRank);
+			rnk = AOCPRI(AgathaT[idx].PlayerReplicationInfo).MyRank;
+			PC.ClientDisplayConsoleMessage(rnk);
 		}
 		
 		PC.ClientDisplayConsoleMessage("MASON LIST :::::::: ");
 		for(idx=0;idx<MasonT.Length;idx++) {
-			PC.ClientDisplayConsoleMessage(AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank);
+			rnk = AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank;
+			PC.ClientDisplayConsoleMessage(rnk);
 		}
 	}
 }
@@ -931,77 +1052,45 @@ function bool RequestJoinTeam(AOCPlayerController inController, EAOCFaction inTe
 
 	bAllow = true; // Default for non-autobalance games is to always let player change go through
 	// Only do this if we're using sort of autobalance
-	if (bAutoBalance || bDeathBasedAutoBalance)
+	if (bAutoBalance)
 	{
 		CurrentTeam = AOCPRI(inController.PlayerReplicationInfo).GetCurrentTeam();
 
 		// Select Random Team
 		if (inTeam == EFAC_ALL)
 		{
-			inTeam = EAOCFaction(Rand(2));
-			if (inTeam == EFAC_AGATHA)
-			{
-				if (!(PotentialAgathaSize <= PotentialMasonSize || PotentialAgathaSize == 0))
-				{
-					inTeam = EFAC_MASON;
-				}
-				if (CurrentTeam == EFAC_MASON && PotentialMasonSize == PotentialAgathaSize && PotentialAgathaSize > 0)
-				{
-					inTeam = EFAC_MASON;
-				}
+			if (!(PotentialAgathaSize <= PotentialMasonSize || PotentialAgathaSize == 0) || ( CurrentTeam == EFAC_MASON && PotentialMasonSize == PotentialAgathaSize && PotentialAgathaSize > 0) {
+				inTeam = EFAC_MASON;
+			} else if (!(PotentialMasonSize <= PotentialAgathaSize || PotentialMasonSize == 0) || (CurrentTeam == EFAC_AGATHA && PotentialMasonSize == PotentialAgathaSize && PotentialMasonSize > 0)) {
+				inTeam = EFAC_AGATHA;
 			}
-			else
-			{
-				if (!(PotentialMasonSize <= PotentialAgathaSize || PotentialMasonSize == 0))
-				{
-					inTeam = EFAC_AGATHA;
-				}
-				if (CurrentTeam == EFAC_AGATHA && PotentialMasonSize == PotentialAgathaSize && PotentialMasonSize > 0)
-				{
-					inTeam = EFAC_AGATHA;
-				}
+			else {
+				inTeam = EAOCFaction(Rand(2));
 			}		
 		}
-
-		bAllow = false; // Autobalanced games default is no.
-		// Reject if we're going to pass any limits here
-		if (inTeam == EFAC_AGATHA && CurrentTeam != inTeam)
-		{
-			bAllow = PotentialAgathaSize <= PotentialMasonSize || bForce || PotentialAgathaSize == 0;
-
-			if (CurrentTeam == EFAC_MASON && PotentialMasonSize == PotentialAgathaSize && PotentialAgathaSize > 0)
+		if(CurrentTeam != inTeam) {
+			if (PotentialMasonSize == PotentialAgathaSize && PotentialAgathaSize > 0)
 			{
 				bAllow = false;
 			}
 
-			if (bAllow)
-			{
-				// Set appropriate temp class
-				AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(EFAC_AGATHA);
-			}
-
-			if (!bForce)
-				inController.Response_JoinTeam(inTeam, bAllow);
-		}
-		else if (inTeam == EFAC_MASON && CurrentTeam != inTeam)
-		{
-			bAllow = PotentialMasonSize <= PotentialAgathaSize || bForce || PotentialMasonSize == 0;
+			if(inTeam == EFAC_AGATHA) 
+				bAllow = bAllow && (PotentialAgathaSize <= PotentialMasonSize || bForce || PotentialAgathaSize == 0);
+			else if(inTeam == EFAC_MASON)
+				bAllow = bAllow && (PotentialMasonSize <= PotentialAgathaSize || bForce || PotentialMasonSize == 0);
 			
-			if (CurrentTeam == EFAC_AGATHA && PotentialMasonSize == PotentialAgathaSize && PotentialMasonSize > 0)
-			{
-				bAllow = false;
-			}
-
 			if (bAllow)
 			{
 				// Set appropriate temp class
-				AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(EFAC_MASON);
+				AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(inTeam);
+	
+				if (!bForce)
+					inController.Response_JoinTeam(inTeam, true);
+		
 			}
 
-			if (!bForce)
-				inController.Response_JoinTeam(inTeam, bAllow);
 		}
-		else if (inTeam != EFAC_NONE && inTeam == CurrentTeam) // User is always allowed to join team again.
+		else if (inTeam != EFAC_NONE) // User is always allowed to join team again.
 		{
 			AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(inTeam);
 
@@ -1019,28 +1108,20 @@ function bool RequestJoinTeam(AOCPlayerController inController, EAOCFaction inTe
 		// Select Random Team
 		if (inTeam == EFAC_ALL)
 		{
-			inTeam = EAOCFaction(Rand(2));
-
-			if (inTeam == EFAC_AGATHA)
+			if (!(PotentialAgathaSize <= PotentialMasonSize || PotentialAgathaSize == 0))
 			{
-				if (!(PotentialAgathaSize <= PotentialMasonSize || PotentialAgathaSize == 0))
-				{
-					inTeam = EFAC_MASON;
-				}
-			}
-			else
+				inTeam = EFAC_MASON;
+			} else if (!(PotentialMasonSize <= PotentialAgathaSize || PotentialMasonSize == 0))
 			{
-				if (!(PotentialMasonSize <= PotentialAgathaSize || PotentialMasonSize == 0))
-				{
-					inTeam = EFAC_AGATHA;
-				}
+				inTeam = EFAC_AGATHA;
+			} else {
+ 				inTeam = EAOCFaction(Rand(2));
 			}
 		}
+		AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(inTeam);
 
 		if (!bForce)
 			inController.Response_JoinTeam(inTeam, true);
-
-		AOCPRI(inController.PlayerReplicationInfo).SetNextTeam(inTeam);
 	}
 	return bAllow;
 }
@@ -1048,7 +1129,7 @@ function bool RequestJoinTeam(AOCPlayerController inController, EAOCFaction inTe
 
 function AddMeToAutobalance(AOCPRI PRI) // 넌 임마 구조조정 대상자야!
 {
-	if (AutoBalanceStack.Find(PRI) == INDEX_NONE)
+	if (AutoBalanceStack.Find(PRI) == INDEX_NONE) // 오토밸런스 목록에 아직 존재 x라면 추가
 	{
 		AutoBalanceStack.InsertItem(0, PRI);
 	}
@@ -1079,30 +1160,32 @@ function PerformDeathBasedAB(AOCPlayerController inPC) // 죽었을때 팀을 �
 	// Don't perform auto-balance in the last 2 minutes of the game
 	if (TimeLeft <= 120)
 		return;
-
+// 오토밸런스 스택 내에 해당 PC가 들어있을 경우
 	if (!CanIBeAutoBalanced(inPC))
 		return;
 
-	// Check if auto-balance is needed
+	// Check if auto-balance is needed 오토밸런스 필요한지 확인하기
 	if (Abs(AOCGRI(GameReplicationInfo).AgathaSize - AOCGRI(GameReplicationInfo).MasonSize) >= 2)
 	{
 		if (AOCGRI(GameReplicationInfo).AgathaSize > AOCGRI(GameReplicationInfo).MasonSize) // 아가사 -> 메이슨 해야함
 			BalanceAgatha = true;
 
-		if (BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_AGATHA) // 죽은놈이 아가사네?
+		if (BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_AGATHA) // 아가사 -> 메이슨
 		{
 			NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[inPC.CurrentFamilyInfo.default.ClassReference + 5];
-			
+			// 아가사 + 5 -> 메이슨
 			inPC.ClientAutoBalance(NewFamily);
-
+			// 뭔지 찾아보기
 			LocalizedPrivateMessage(inPC, 27);
+			// You will be autobalanced 메시지 출력
 			inPC.SetNewClass(NewFamily, false, false);
+			// 값 설정한대로 클래스 바꿔주기
 			AOCPRI(inPC.PlayerReplicationInfo).MyFamilyInfo = none;
 		}
-		else if (!BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_MASON) // 메이슨 -> 아가산데 죽은놈이 메이슨이네?
+		else if (!BalanceAgatha && inPC.CurrentFamilyInfo.FamilyFaction == EFAC_MASON) // 메이슨 -> 아가사
 		{
 			NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[inPC.CurrentFamilyInfo.default.ClassReference];
-			
+			// 이렇게 하면 메이슨 -> 아가사인듯
 			inPC.ClientAutoBalance(NewFamily);
 
 			LocalizedPrivateMessage(inPC, 27);
