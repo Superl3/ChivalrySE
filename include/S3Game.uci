@@ -2,6 +2,9 @@ var config array<GameTypePrefix>	SDKPrefixes;
 var int sumAgatha, sumMason;
 var S3RCon RCon;
 var array<`{GAMEMODE}PlayerController> AgathaT, MasonT, Total;
+var array<`{GAMEMODE}PlayerController>           RankBalanceStack;   // First Element in AutoBalanceStack is the player we want to move
+												// Move players to the end of the AutoBalanceStack once we move them
+												// Purely move basd on team and LIFO
 static event class<GameInfo> SetGameType(string MapName, string Options, string Portal) {
 	local string ThisMapPrefix;
 	local int i,pos;
@@ -51,8 +54,9 @@ function Killed( Controller Killer, Controller KilledPlayer, Pawn KilledPawn, cl
 	}
 
 	// Check to see if we want to autobalance dead player
-	PerformDeathBasedAB(AOCPlayerController(KilledPlayer));
-
+	//PerformDeathBasedAB(AOCPlayerController(KilledPlayer));
+	if(CanIBeRBAB(`{GAMEMODE}PlayerController(KilledPlayer)))
+		RB_changeTeam(`{GAMEMODE}PlayerController(KilledPlayer));
 	NotifyKilled(Killer, KilledPlayer, KilledPawn, damageType);
 	
 	`RecordKillEvent(NORMAL, Killer, DamageType, KilledPlayer);
@@ -730,6 +734,7 @@ event InitGame( string Options, out string ErrorMessage )
 		class'Engine'.static.GetEngine().bAllPawnsAlwaysRelevant = true;
 	}
 
+	RankBalanceStack.Length = 0
 	CustomizationClass = Class(DynamicLoadObject("AOCCustomizationContent.AOCCustomizationContent",class'Class'));
 	bSoakTesting = HasOption(Options, "SoakTesting");
 	NumBotsToSpawn = Clamp(GetIntOption( Options, "NumPlay", 0 ), 0, 32);
@@ -869,6 +874,8 @@ function DeathBasedRankAB() {
 	diff = 100000;
 
 	foreach WorldInfo.AllControllers(class'`{GAMEMODE}PlayerController', PC) {
+		if(CanIBeRBAB(PC))
+			continue;
 		if(AOCPRI(PC).GetCurrentTeam() == EFAC_AGATHA)
 			AgathaT.Additem(PC);
 		else if(AOCPRI(PC).GetCurrentTeam() == EFAC_MASON)
@@ -884,8 +891,12 @@ function DeathBasedRankAB() {
 		sum -= rnk * rnk;
 	}
 	for(idx = 0; idx< AgathaT.Length;idx++) {
+		if(AgathaT[idx].CurrentFamilyInfo.class == class'AOCFamilyInfo_Agatha_King')
+			continue;
 		rnk = AOCPRI(AgathaT[idx].PlayerReplicationInfo).MyRank;
 		for(i = 0; i<MasonT.Length;i++) {		
+			if(MasonT[i].CurrentFamilyInfo.class == class'AOCFamilyInfo_Mason_King'))
+				continue;
 			rnkB = AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank;
 			if(diff > abs(sum - rnk*rnk*2 + rnkB*rnkB*2)) {
 				diff = abs(sum - rnk*rnk*2 + rnkB*rnkB*2);
@@ -897,6 +908,8 @@ function DeathBasedRankAB() {
 	if(abs(AgathaT.Length - MasonT.Length) >= 1) {// trade or give
 		if(AgathaT.Length > MasonT.Length) { 
 			for(i = 0; i<AgathaT.Length;i++) {		
+				if(AgathaT[i].CurrentFamilyInfo.class == class'AOCFamilyInfo_Agatha_King')
+					continue;		
 				rnk = AOCPRI(AgathaT[i].PlayerReplicationInfo).MyRank;
 				if(diff > abs(sum - rnk*rnk*2)) {
 					diff = abs(sum - rnk*rnk*2);
@@ -906,6 +919,8 @@ function DeathBasedRankAB() {
 			}
 		} else {
 			for(i = 0; i<MasonT.Length;i++) {		
+				if(MasonT[i].CurrentFamilyInfo.class == class'AOCFamilyInfo_Mason_King'))
+					continue;
 				rnk = AOCPRI(MasonT[idx].PlayerReplicationInfo).MyRank;
 				if(diff > abs(sum - rnk*rnk*2)) {
 					diff = abs(sum - rnk*rnk*2);
@@ -917,12 +932,16 @@ function DeathBasedRankAB() {
 	} 
 
 	if(keyAgatha != -1) {
-		RB_changeTeam(true,AgathaT[keyAgatha]);
+		RankBalanceStack.RemoveItem(AgathaT[keyAgatha]);
+		RankBalanceStack.AddItem(AgathaT[keyAgatha]);
+		//RB_changeTeam(true,AgathaT[keyAgatha]);
 		AgathaT.Length -= 1;
 		MasonT.Length += 1;
 	}
 	if(keyMason != -1) {
-		RB_changeTeam(false,MasonT[keyMason]);
+		RankBalanceStack.RemoveItem(MasonT[keyMason]);
+		RankBalanceStack.AddItem(MasonT[keyMason]);
+		//RB_changeTeam(false,MasonT[keyMason]);
 		MasonT.Length -= 1;
 		AgathaT.Length += 1;
 	}
@@ -930,13 +949,15 @@ function DeathBasedRankAB() {
 		DeathBasedRankAB();
 	}
 }
-function RB_changeTeam(bool isAgatha, `{GAMEMODE}PlayerController PC) {
+function RB_changeTeam( `{GAMEMODE}PlayerController PC) {
 	local AOCFamilyInfo NewFamily;
+	
+	RankBalanceStack.RemoveItem(PC);
 
-	if(isAgatha)
+	if(AOCPRI(PC.PlayerReplicationInfo).GetCurrentTeam() == 'EFAC_AGATHA')
 		NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[PC.CurrentFamilyInfo.default.ClassReference + 5];
 	else 
-		NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[PC.CurrentFamilyInfo.default.ClassReference + 5];
+		NewFamily = AOCGRI(GameReplicationInfo).FamilyInfos[PC.CurrentFamilyInfo.default.ClassReference];
 	
 	PC.ClientAutoBalance(NewFamily);
 	LocalizedPrivateMessage(PC, 27);
@@ -1150,6 +1171,21 @@ function bool CanIBeAutoBalanced(AOCPlayerController inPC) // 내가 구조조�
 	return false;
 }
 
+function bool CanIBeRBAB(`{GAMEMODE}PlayerController inPC) // 내가 구조조정 대상자라고?
+{
+	local int IndexOfAutoBalance, i;
+
+	IndexOfAutoBalance = RankBalanceStack.Length;
+
+	for(i=0; i <= IndexOfAutoBalance; i++)
+	{
+		if(RankBasedAutobalance[i] == inPC)
+			return true;
+	}
+
+	return false;
+}
+
 function PerformDeathBasedAB(AOCPlayerController inPC) // 죽었을때 팀을 바꾼다
 {
 	local AOCFamilyInfo NewFamily;
@@ -1160,7 +1196,7 @@ function PerformDeathBasedAB(AOCPlayerController inPC) // 죽었을때 팀을 �
 	// Don't perform auto-balance in the last 2 minutes of the game
 	if (TimeLeft <= 120)
 		return;
-// 오토밸런스 스택 내에 해당 PC가 들어있을 경우
+// 오토밸런스 스택 내에 해당 PC가 들어있을 경우 : 게임 시작시에 모든 플레이어를 스택 내에 넣는다
 	if (!CanIBeAutoBalanced(inPC))
 		return;
 
@@ -1192,7 +1228,7 @@ function PerformDeathBasedAB(AOCPlayerController inPC) // 죽었을때 팀을 �
 			inPC.SetNewClass(NewFamily, false, false);
 			AOCPRI(inPC.PlayerReplicationInfo).MyFamilyInfo = none;
 		}
-
+		// 해당 유저가 오토밸런스 되었으므로 스택 내 위치를 최 후방으로 움직인다.
 		AutoBalanceStack.RemoveItem(AOCPRI(inPC.PlayerReplicationInfo));
 		AutoBalanceStack.AddItem(AOCPRI(inPC.PlayerReplicationInfo));
 	}
